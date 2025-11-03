@@ -22,7 +22,6 @@ jobs:
       
       - name: Install dependencies
         run: |
-          cd WakayamaApp.ServerWorkflow
           pip install -r requirements.txt
       
       - name: Process PDFs
