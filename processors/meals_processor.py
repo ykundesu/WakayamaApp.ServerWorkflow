@@ -1,0 +1,284 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+寮食PDF処理
+献立PDFを処理して週ごとのJSONに分割してmeals/ディレクトリに出力
+"""
+
+import os
+import json
+import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timedelta, date
+from collections import defaultdict
+
+from ..common.pdf_processor import PDFProcessor
+from ..common.image_utils import render_pdf_pages
+
+
+MEALS_PROMPT = """献立の画像を添付してあります。以下のスキーマの形で画像に含まれている一週間の献立を抜き出してください。
+上から順に、朝昼晩の食事です。
+もし空欄の場合は、そのメニュー(例えばB)は存在しないということです。(休日や祝日の場合に一部メニューが存在しない場合があります。)
+また、「共通」に含まれているものは対象のメニューの全てのsubsに含めてください。例えば、共通に味噌汁とライスが指定されている場合、AとBのどちらものsubsに味噌汁,ライスと出力する必要があります。
+ただし、朝の場合は朝の中で一番上に記載されているメニューをA/B共にmainとしてください。ライス/パンなどは、それぞれAとBに振り分けて。
+```{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/menu.schema.json",
+  "title": "Daily Menus",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "menus": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/MenuDay" }
+    }
+  },
+  "required": ["menus"],
+  "$defs": {
+    "Nutritional": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "E": { "type": "number", "minimum": 0, "description": "kcal など" },
+        "P": { "type": "number", "minimum": 0 },
+        "F": { "type": "number", "minimum": 0 },
+        "Ca": { "type": "number", "minimum": 0 },
+        "S": { "type": "number", "minimum": 0 }
+      },
+      "required": ["E", "P", "F", "Ca", "S"]
+    },
+    "MenuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string" },
+        "main": { "type": "string" },
+        "subs": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "isRice": { "type": "boolean" },
+        "isCurry": { "type": "boolean" },
+        "nutritional": { "$ref": "#/$defs/Nutritional" }
+      },
+      "required": ["type", "main", "subs", "isRice", "isCurry", "nutritional"]
+    },
+    "Meal": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/MenuItem" }
+    },
+    "MenuDay": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "day": {
+          "type": "string",
+          "pattern": "^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$",
+          "description": "MM/DD"
+        },
+        "breakfast": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/MenuItem" },
+          "description": "nullable"
+        },
+        "lunch": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/MenuItem" },
+          "description": "nullable"
+        },
+        "dinner": {
+          "type": ["array", "null"],
+          "items": { "$ref": "#/$defs/MenuItem" },
+          "description": "nullable"
+        }
+      },
+      "required": ["day"]
+    }
+  }
+}```
+提供されている全ての日時のbreakfast, lunch, dinnerのデータを抽出してください。"""
+
+
+def _to_iso_date(mmdd: str, base_year: Optional[int] = None) -> str:
+    """'MM/DD' を 'YYYY-MM-DD' に変換。年は base_year（未指定なら今年）。"""
+    if base_year is None:
+        base_year = datetime.now().year
+    month_str, day_str = mmdd.split("/")
+    dt = date(base_year, int(month_str), int(day_str))
+    return dt.strftime("%Y-%m-%d")
+
+
+def get_monday_date(date_str: str) -> str:
+    """与えられた日付の週の月曜日を取得する"""
+    date = datetime.strptime(date_str, '%Y-%m-%d')
+    monday = date - timedelta(days=date.weekday())
+    return monday.strftime('%Y-%m-%d')
+
+
+def group_by_week(menus: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """メニューを週ごとにグループ化する"""
+    weekly_menus = defaultdict(list)
+    
+    for menu in menus:
+        date_str = menu['date']
+        monday_date = get_monday_date(date_str)
+        weekly_menus[monday_date].append(menu)
+    
+    return weekly_menus
+
+
+def convert_daily_to_all(src: Dict[str, Any], base_year: Optional[int] = None) -> Dict[str, Any]:
+    """旧『Daily Menus』形式の dict を、新『All Menus』形式の dict に変換。"""
+    if type(src) == list:
+        result = {"menus": []}
+        for item in src:
+            for day in item["menus"]:
+                result["menus"].append(day)
+        src = result
+    
+    menus = src.get("menus")
+    if not isinstance(menus, list):
+        raise ValueError("src['menus'] は配列である必要があるよ。")
+    
+    out_days: List[Dict[str, Any]] = []
+    for day in menus:
+        if not isinstance(day, dict):
+            continue
+        mmdd = day.get("day")
+        if not isinstance(mmdd, str):
+            raise ValueError("各メニューの 'day' は 'MM/DD' 文字列である必要があるよ。")
+        
+        out_days.append({
+            "date": _to_iso_date(mmdd, base_year),
+            "breakfast": day.get("breakfast") or [],
+            "lunch": day.get("lunch") or [],
+            "dinner": day.get("dinner") or [],
+        })
+    
+    return {"allMenus": out_days}
+
+
+def process_meals_pdf(
+    pdf_path: str,
+    out_dir: Path,
+    model: str = "gemini-2.5-pro",
+    api_key: Optional[str] = None,
+    dpi: int = 288,  # gemini_pdf_pipeline.pyのデフォルト値
+    temperature: float = 0.6,
+    max_tokens: int = 2000,
+    use_yomitoku: bool = False,
+    yomitoku_device: str = "cpu",
+    yomitoku_config: Optional[Path] = None,
+    prompt_file: Optional[Path] = None,  # プロンプトファイル（オプション）
+) -> bool:
+    """
+    寮食PDFを処理する
+    
+    Args:
+        pdf_path: PDFファイルパス
+        out_dir: 出力ディレクトリ
+        model: 使用するモデル名
+        api_key: APIキー
+        dpi: レンダリングDPI
+        temperature: 温度パラメータ
+        max_tokens: 最大トークン数
+        use_yomitoku: Yomitoku OCRを使用するか
+        yomitoku_device: Yomitokuデバイス
+        yomitoku_config: Yomitoku設定ファイルパス
+    
+    Returns:
+        処理成功したかどうか
+    """
+    try:
+        # 出力ディレクトリ作成
+        out_dir.mkdir(parents=True, exist_ok=True)
+        json_dir = out_dir / "json"
+        json_dir.mkdir(parents=True, exist_ok=True)
+        meals_dir = out_dir / "meals"
+        meals_dir.mkdir(parents=True, exist_ok=True)
+        
+        # PDFProcessor初期化
+        processor = PDFProcessor(
+            model=model,
+            api_key=api_key,
+            schema=None,  # スキーマはプロンプトに含める
+            dpi=dpi,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            use_yomitoku=use_yomitoku,
+            yomitoku_device=yomitoku_device,
+            yomitoku_config=yomitoku_config,
+        )
+        
+        # プロンプトテキストを決定（ファイルから読み込むか、デフォルトを使用）
+        if prompt_file and prompt_file.exists():
+            prompt_text = prompt_file.read_text(encoding="utf-8")
+        else:
+            prompt_text = MEALS_PROMPT
+        
+        # PDFをレンダリング
+        pages = render_pdf_pages(pdf_path, dpi=dpi)
+        print(f"{len(pages)} ページをレンダリングしました。")
+        
+        # 各ページを処理
+        all_menus = []
+        for idx, im in enumerate(pages, start=1):
+            label = f"page_{idx:04d}"
+            print(f"Processing: {label} ...")
+            
+            try:
+                result_json = processor.process_page(
+                    page_num=idx,
+                    page_image=im,
+                    prompt=prompt_text,
+                    out_dir=out_dir,
+                    call_mode="none",  # RyosokuProcess-Yomitokuの方式: full画像のみ
+                    merge_strategy="deep",
+                )
+                
+                # 結果からmenusを抽出
+                if isinstance(result_json, dict) and "result" in result_json:
+                    menus_data = result_json["result"]
+                else:
+                    menus_data = result_json
+                
+                if isinstance(menus_data, dict) and "menus" in menus_data:
+                    all_menus.extend(menus_data["menus"])
+                
+                # JSON保存
+                page_json_path = json_dir / f"{label}.json"
+                with open(page_json_path, "w", encoding="utf-8") as f:
+                    json.dump(result_json, f, ensure_ascii=False, indent=2)
+                print("  -> JSON保存OK")
+                
+            except Exception as e:
+                print(f"  -> ERROR: {e}")
+                continue
+        
+        # 週ごとに分割
+        if all_menus:
+            converted = convert_daily_to_all({"menus": all_menus}, base_year=datetime.now().year)
+            weekly_menus = group_by_week(converted["allMenus"])
+            
+            # 週ごとのメニューを保存
+            for monday_date, menus in weekly_menus.items():
+                filename = f"{monday_date}.json"
+                filepath = meals_dir / filename
+                
+                week_data = {
+                    "week_start": monday_date,
+                    "menus": menus
+                }
+                
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(week_data, f, ensure_ascii=False, separators=(',', ':'))
+                
+                print(f"保存しました: {filepath} ({len(menus)}件のメニュー)")
+        
+        return True
+    except Exception as e:
+        print(f"寮食PDF処理エラー: {e}")
+        return False
+

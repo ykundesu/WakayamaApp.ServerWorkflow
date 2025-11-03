@@ -1,0 +1,51 @@
+name: Server Processor Workflow
+
+on:
+  # cron設定（ユーザーが指定）
+  # 例: 毎日午前2時（JST）に実行
+  # schedule:
+  #   - cron: '0 17 * * *'  # UTC 17:00 = JST 02:00
+  workflow_dispatch:  # 手動実行も可能
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          cd WakayamaApp.ServerWorkflow
+          pip install -r requirements.txt
+      
+      - name: Process PDFs
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
+          SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
+        run: |
+          cd WakayamaApp.ServerWorkflow
+          python main.py \
+            --process all \
+            --output-dir ./output \
+            --model gemini-2.5-pro \
+            --update-server \
+            --server-repo-url "$SERVER_REPO_URL" \
+            --branch main
+      
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: WakayamaApp.ServerWorkflow/output/
+          retention-days: 7
+
