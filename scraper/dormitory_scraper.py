@@ -6,6 +6,7 @@
 """
 
 import re
+import unicodedata
 import requests
 from datetime import datetime
 from typing import Optional, List, Dict, Any
@@ -61,20 +62,25 @@ def extract_date_from_text(text: str) -> Optional[str]:
     Returns:
         抽出された日付文字列（YYYY-MM形式など）またはNone
     """
-    # 2025年4月, 2025/04, 202504 などのパターン
+    normalized = unicodedata.normalize("NFKC", text) if text else ""
+    if not normalized:
+        return None
+
+    # よくある区切り文字をまとめて検索
     patterns = [
-        r"(\d{4})年(\d{1,2})月",  # 2025年4月
-        r"(\d{4})/(\d{1,2})",     # 2025/04
-        r"(\d{4})(\d{2})",        # 202504
+        r"(\d{4})\s*年\s*(\d{1,2})\s*月",           # 2025年4月
+        r"(\d{4})\s*[./_-]\s*(\d{1,2})\s*月?",      # 2025.04月 / 2025-04 など
+        r"(\d{4})(\d{2})",                          # 202504
     ]
-    
+
     for pattern in patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, normalized)
         if match:
-            year = match.group(1)
-            month = match.group(2).zfill(2)
-            return f"{year}-{month}"
-    
+            year = int(match.group(1))
+            month = int(match.group(2))
+            if 1 <= month <= 12:
+                return f"{year}-{str(month).zfill(2)}"
+
     return None
 
 
@@ -94,10 +100,16 @@ def find_latest_pdf_url(html: str, base_url: str) -> Optional[str]:
     if not pdf_links:
         return None
     
-    # 日付情報でソート（最新順）
+    # 日付情報でソート（来月→今月以降→過去→不明）
     now = datetime.now()
     current_year = now.year
     current_month = now.month
+    if current_month == 12:
+        next_year = current_year + 1
+        next_month = 1
+    else:
+        next_year = current_year
+        next_month = current_month + 1
     
     def sort_key(link: Dict[str, Any]) -> tuple:
         date_info = link.get("date")
@@ -108,12 +120,12 @@ def find_latest_pdf_url(html: str, base_url: str) -> Optional[str]:
                 month_int = int(month)
                 
                 # 来月分を優先
-                if year_int == current_year and month_int == current_month + 1:
-                    return (0, year_int, month_int)  # 最優先
-                elif year_int == current_year and month_int >= current_month:
-                    return (1, year_int, month_int)  # 今月以降
+                if year_int == next_year and month_int == next_month:
+                    return (0, -year_int, -month_int)  # 最優先
+                elif (year_int, month_int) >= (current_year, current_month):
+                    return (1, -year_int, -month_int)  # 今月以降
                 else:
-                    return (2, year_int, month_int)  # 過去
+                    return (2, -year_int, -month_int)  # 過去
             except ValueError:
                 pass
         
