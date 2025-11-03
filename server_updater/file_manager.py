@@ -66,21 +66,38 @@ def copy_meals_files(source_dir: Path, target_dir: Path) -> List[Tuple[Path, Pat
     """
     logger.info(f"寮食データファイルをコピー中: {source_dir} -> {target_dir}")
     copied_files = []
-    meals_dir = source_dir / "meals"
-    
-    if not meals_dir.exists():
-        logger.warning(f"meals/ディレクトリが存在しません: {meals_dir}")
-        return copied_files
-    
     target_dir.mkdir(parents=True, exist_ok=True)
     
-    # meals/内のすべてのJSONファイルをコピー
-    json_files = list(meals_dir.glob("*.json"))
-    logger.debug(f"コピー対象のJSONファイル数: {len(json_files)}")
-    for json_file in json_files:
-        target_file = target_dir / json_file.name
-        shutil.copy2(json_file, target_file)
-        copied_files.append((json_file, target_file))
+    # source_dir（例: meals_output）配下の各サブディレクトリにある meals/*.json を再帰的にコピー
+    # 想定構造: {source_dir}/{label}/meals/*.json
+    found_any = False
+    for label_dir in source_dir.iterdir() if source_dir.exists() else []:
+        if not label_dir.is_dir():
+            continue
+        meals_dir = label_dir / "meals"
+        if not meals_dir.exists():
+            logger.debug(f"meals/ディレクトリが見つかりません: {meals_dir}")
+            continue
+        json_files = list(meals_dir.glob("*.json"))
+        logger.debug(f"{label_dir.name}: コピー対象のJSONファイル数: {len(json_files)}")
+        for json_file in json_files:
+            target_file = target_dir / json_file.name
+            shutil.copy2(json_file, target_file)
+            copied_files.append((json_file, target_file))
+            found_any = True
+    
+    if not found_any:
+        # 旧構造: source_dir/meals/*.json にも一応対応
+        fallback_meals_dir = source_dir / "meals"
+        if fallback_meals_dir.exists():
+            json_files = list(fallback_meals_dir.glob("*.json"))
+            logger.debug(f"fallback構造: コピー対象のJSONファイル数: {len(json_files)}")
+            for json_file in json_files:
+                target_file = target_dir / json_file.name
+                shutil.copy2(json_file, target_file)
+                copied_files.append((json_file, target_file))
+        else:
+            logger.warning(f"meals/ディレクトリが存在しません: {fallback_meals_dir}")
     
     logger.info(f"寮食データファイルコピー完了: {len(copied_files)}ファイル")
     return copied_files
