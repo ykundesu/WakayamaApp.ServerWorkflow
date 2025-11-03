@@ -32,7 +32,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
         run: |
-          cd WakayamaApp.ServerWorkflow
           python main.py \
             --process all \
             --output-dir ./output \
@@ -48,4 +47,5 @@ jobs:
           name: output
           path: WakayamaApp.ServerWorkflow/output/
           retention-days: 7
+
 
