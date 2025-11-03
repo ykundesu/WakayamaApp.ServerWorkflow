@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 授業ページスクレイパー
@@ -13,7 +13,51 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
 
+FULLWIDTH_DIGIT_TRANSLATION = str.maketrans({
+    "０": "0",
+    "１": "1",
+    "２": "2",
+    "３": "3",
+    "４": "4",
+    "５": "5",
+    "６": "6",
+    "７": "7",
+    "８": "8",
+    "９": "9",
+})
+
+ERA_OFFSETS = {
+    "令和": 2018,
+    "平成": 1988,
+    "昭和": 1925,
+}
+
+TERM_KEYWORDS = {
+    0: (
+        "前期",
+        "前学期",
+        "春学期",
+        "第1学期",
+        "第一学期",
+        "1学期",
+    ),
+    1: (
+        "後期",
+        "後学期",
+        "秋学期",
+        "第2学期",
+        "第二学期",
+        "2学期",
+    ),
+}
+
+
 CLASSES_URL = "https://www.wakayama-nct.ac.jp/campuslife/education/program/"
+
+
+def normalize_text(text: str) -> str:
+    """全角数字を半角に揃える。"""
+    return text.translate(FULLWIDTH_DIGIT_TRANSLATION)
 
 
 def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, Any]]:
@@ -62,7 +106,17 @@ def extract_year_term_from_text(text: str) -> Dict[str, Optional[int]]:
     Returns:
         {"year": 年度, "term": 学期} の辞書
     """
+    normalized_text = normalize_text(text)
     result = {"year": None, "term": None}
+
+    # 和暦（令和・平成など）を西暦に変換
+    for era, offset in ERA_OFFSETS.items():
+        match = re.search(rf"{era}(\d+)年[度]?", normalized_text)
+        if match:
+            era_year = int(match.group(1))
+            if era_year > 0:
+                result["year"] = offset + era_year
+            break
     
     # 年度パターン（2025年度、2025前期、2025後期など）
     year_patterns = [
@@ -71,16 +125,20 @@ def extract_year_term_from_text(text: str) -> Dict[str, Optional[int]]:
     ]
     
     for pattern in year_patterns:
-        match = re.search(pattern, text)
+        match = re.search(pattern, normalized_text)
         if match:
             year = int(match.group(1))
             result["year"] = year
     
     # 学期パターン（前期=0, 後期=1）
-    if "前期" in text or "前期" in text.lower():
-        result["term"] = 0
-    elif "後期" in text or "後期" in text.lower():
-        result["term"] = 1
+    lower_text = normalized_text.lower()
+    for term_value, keywords in TERM_KEYWORDS.items():
+        for keyword in keywords:
+            if keyword in normalized_text or keyword.lower() in lower_text:
+                result["term"] = term_value
+                break
+        if result["term"] is not None:
+            break
     
     return result
 

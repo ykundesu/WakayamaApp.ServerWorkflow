@@ -9,7 +9,7 @@ import os
 import sys
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Dict
 
 # パスを追加
 sys.path.insert(0, str(Path(__file__).parent))
@@ -36,60 +36,113 @@ def process_dormitory_meals(
     """寮食PDFの処理"""
     try:
         print("寮食ページをスクレイピング中...")
-        pdf_url = scrape_dormitory_page()
+        pdf_infos = scrape_dormitory_page()
         
-        if not pdf_url:
+        if not pdf_infos:
             print("寮食PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "meals", "PDFリンクが見つかりませんでした。")
             return False
+
+        pdf_dir = output_dir / "pdfs"
+        pdf_dir.mkdir(parents=True, exist_ok=True)
+        meals_output_root = output_dir / "meals_output"
         
-        print(f"PDF URL: {pdf_url}")
+        processed: List[Dict[str, str]] = []
+        skipped_existing: List[str] = []
+        skipped_not_updated: List[str] = []
+        had_error = False
         
-        # PDFダウンロード
-        pdf_path = output_dir / "pdfs" / "meals.pdf"
-        pdf_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # 更新チェック
-        is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
-        if not is_updated:
-            print("PDFが更新されていません。")
-            if discord_webhook:
-                notify_no_update(discord_webhook, "meals", "PDFが更新されていません。")
-            return False
-        
-        if not download_pdf(pdf_url, pdf_path):
-            print("PDFのダウンロードに失敗しました。")
-            if discord_webhook:
-                notify_error(discord_webhook, "meals", "PDFのダウンロードに失敗しました。")
-            return False
-        
-        # PDF処理
-        print("寮食PDFを処理中...")
-        meals_output_dir = output_dir / "meals_output"
-        success = process_meals_pdf(
-            pdf_path=str(pdf_path),
-            out_dir=meals_output_dir,
-            model=model,
-            api_key=api_key,
-            dpi=dpi,
-            use_yomitoku=use_yomitoku,
-            prompt_file=prompt_file,
-        )
-        
-        if success:
-            print("寮食PDF処理が完了しました。")
-            if discord_webhook:
-                notify_success(
-                    discord_webhook,
-                    "meals",
-                    {"処理済みPDF": pdf_url, "出力ディレクトリ": str(meals_output_dir)},
+        for index, pdf_info in enumerate(pdf_infos, start=1):
+            pdf_url = pdf_info.get("url")
+            if not pdf_url:
+                print(f"URLが取得できなかったエントリをスキップします: {pdf_info}")
+                continue
+            
+            date_label = pdf_info.get("date")
+            year = pdf_info.get("year")
+            month = pdf_info.get("month")
+            fallback_label = f"pdf_{index:02d}"
+            if year and month:
+                fallback_label = f"{year}-{month:02d}"
+            label = (date_label or fallback_label).replace("/", "-").replace(" ", "_")
+            target_label = pdf_info.get("target", "unknown")
+            
+            print(f"処理対象 ({target_label}): {label} -> {pdf_url}")
+            
+            month_output_dir = meals_output_root / label
+            meals_dir = month_output_dir / "meals"
+            if meals_dir.exists() and any(meals_dir.glob("*.json")):
+                print(f"{label} の既存データが見つかったため処理をスキップします。")
+                skipped_existing.append(label)
+                continue
+            
+            pdf_path = pdf_dir / f"meals_{label}.pdf"
+            
+            # 更新チェック
+            is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
+            if not is_updated:
+                msg = f"{label} のPDFが更新されていません。"
+                print(msg)
+                skipped_not_updated.append(label)
+                continue
+            
+            if not download_pdf(pdf_url, pdf_path):
+                error_message = f"{label} のPDFのダウンロードに失敗しました。"
+                print(error_message)
+                had_error = True
+                if discord_webhook:
+                    notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
+                continue
+            
+            # PDF処理
+            print(f"{label} の寮食PDFを処理中...")
+            success = process_meals_pdf(
+                pdf_path=str(pdf_path),
+                out_dir=month_output_dir,
+                model=model,
+                api_key=api_key,
+                dpi=dpi,
+                use_yomitoku=use_yomitoku,
+                prompt_file=prompt_file,
+            )
+            
+            if success:
+                print(f"{label} の寮食PDF処理が完了しました。")
+                processed.append(
+                    {
+                        "label": label,
+                        "url": pdf_url,
+                        "out_dir": str(month_output_dir),
+                    }
                 )
-        else:
-            if discord_webhook:
-                notify_error(discord_webhook, "meals", "PDF処理に失敗しました。")
+            else:
+                error_message = f"{label} のPDF処理に失敗しました。"
+                print(error_message)
+                had_error = True
+                if discord_webhook:
+                    notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
         
-        return success
+        if processed:
+            if discord_webhook:
+                details = {
+                    "処理済みPDF": "\n".join(f"{p['label']}: {p['url']}" for p in processed),
+                    "出力ディレクトリ": "\n".join(p["out_dir"] for p in processed),
+                }
+                notify_success(discord_webhook, "meals", details)
+            return True
+        
+        if not had_error and discord_webhook:
+            reasons = []
+            if skipped_existing:
+                reasons.append("既存データ: " + ", ".join(skipped_existing))
+            if skipped_not_updated:
+                reasons.append("未更新: " + ", ".join(skipped_not_updated))
+            if not reasons:
+                reasons.append("処理可能なPDFがありませんでした。")
+            notify_no_update(discord_webhook, "meals", "\n".join(reasons))
+        
+        return False
     except Exception as e:
         print(f"寮食処理エラー: {e}")
         if discord_webhook:
@@ -186,17 +239,21 @@ def update_server(
         meals_output_dir = output_dir / "meals_output"
         
         copied_files = []
+        classes_copied_counter = 0
+        meals_copied_counter = 0
         
         if classes_output_dir.exists():
             classes_target = server_repo_path / "v1" / "classes"
             copied = copy_final_files(classes_output_dir, classes_target)
             copied_files.extend(copied)
+            classes_copied_counter = len(copied)
             print(f"授業データ: {len(copied)}ファイルをコピーしました。")
         
         if meals_output_dir.exists():
             meals_target = server_repo_path / "v1" / "meals"
             copied = copy_meals_files(meals_output_dir, meals_target)
             copied_files.extend(copied)
+            meals_copied_counter = len(copied)
             print(f"寮食データ: {len(copied)}ファイルをコピーしました。")
         
         if not copied_files:
@@ -210,7 +267,7 @@ def update_server(
             github_token=github_token,
             repo_url=repo_url,
             branch=branch,
-            commit_message=f"自動更新: {len(copied_files)}ファイルを更新",
+            commit_message=f"Actions: {classes_copied_counter}の授業ファイルと{meals_copied_counter}の寮食ファイルを更新 by Github Actions",
         )
         
         return success
@@ -294,4 +351,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
