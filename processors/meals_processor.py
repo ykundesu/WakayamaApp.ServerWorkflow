@@ -13,8 +13,8 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta, date
 from collections import defaultdict
 
-from ..common.pdf_processor import PDFProcessor
-from ..common.image_utils import render_pdf_pages
+from common.pdf_processor import PDFProcessor
+from common.image_utils import render_pdf_pages
 
 
 MEALS_PROMPT = """献立の画像を添付してあります。以下のスキーマの形で画像に含まれている一週間の献立を抜き出してください。
@@ -281,4 +281,3 @@ def process_meals_pdf(
     except Exception as e:
         print(f"寮食PDF処理エラー: {e}")
         return False
-

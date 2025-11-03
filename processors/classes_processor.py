@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import fitz  # PyMuPDF
 
-from ..common.pdf_processor import PDFProcessor
-from ..common.image_utils import render_pdf_pages
+from common.pdf_processor import PDFProcessor
+from common.image_utils import render_pdf_pages
 
 
 CLASSES_PROMPT = """以下のスキーマで抽出して。
@@ -138,7 +138,7 @@ def process_classes_pdf(
         # 各ページを処理
         for idx, im in enumerate(pages, start=1):
             # 画像バリアント作成と保存
-            from ..common.image_utils import crop_top_bottom
+            from common.image_utils import crop_top_bottom
             top, bottom = crop_top_bottom(im)
             variants = {
                 "full": im,
@@ -253,4 +253,3 @@ def build_final_outputs(json_dir: Path, out_dir: Path) -> None:
                 json.dump(payload, wf, ensure_ascii=False, indent=2)
     
     print("final/ への書き出し完了")
-
