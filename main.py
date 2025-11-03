@@ -494,9 +494,14 @@ def main():
         logger.error("APIキーが設定されていません。")
         sys.exit(1)
     
-    output_dir = args.output_dir
+    output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.debug(f"出力ディレクトリを作成しました: {output_dir}")
+
+    if args.server_repo_path:
+        server_repo_path = args.server_repo_path.resolve()
+    else:
+        server_repo_path = (output_dir / "server_repo").resolve()
     
     # 処理前にserver_repoを初期化してハッシュを読み込む
     meals_processed_hashes: Set[str] = set()
@@ -505,7 +510,6 @@ def main():
     if args.update_server and (args.process in ["meals", "classes", "all"]):
         if github_token and args.server_repo_url:
             logger.info("処理前に既処理ハッシュを読み込み中...")
-            server_repo_path = args.server_repo_path or output_dir / "server_repo"
             if init_git_repo(server_repo_path, github_token, args.server_repo_url, args.branch):
                 if args.process in ["meals", "all"]:
                     meals_processed_hashes = load_processed_hashes(server_repo_path, "meals")
@@ -581,7 +585,6 @@ def main():
             logger.warning("サーバーリポジトリURLが設定されていないため、サーバー更新をスキップします。")
         else:
             logger.info("--- サーバー更新を開始 ---")
-            server_repo_path = args.server_repo_path or output_dir / "server_repo"
             update_server(
                 output_dir=output_dir,
                 server_repo_path=server_repo_path,

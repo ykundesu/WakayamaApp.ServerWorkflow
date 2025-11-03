@@ -5,11 +5,10 @@ Git操作
 WakayamaServerリポジトリへのコミット＆プッシュ
 """
 
-import os
 import logging
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +26,7 @@ def init_git_repo(repo_path: Path, github_token: str, repo_url: str, branch: str
     Returns:
         成功したかどうか
     """
+    repo_path = repo_path.resolve()
     logger.info(f"Gitリポジトリを初期化中: repo_path={repo_path}, branch={branch}")
     try:
         # リポジトリURLにトークンを埋め込む
@@ -50,13 +50,12 @@ def init_git_repo(repo_path: Path, github_token: str, repo_url: str, branch: str
         else:
             # プル
             logger.info("既存リポジトリを更新中...")
-            os.chdir(repo_path)
             logger.debug("git fetchを実行中...")
-            subprocess.run(["git", "fetch"], check=True, capture_output=True)
+            subprocess.run(["git", "fetch"], check=True, capture_output=True, cwd=str(repo_path))
             logger.debug(f"ブランチ {branch} に切り替え中...")
-            subprocess.run(["git", "checkout", branch], check=True, capture_output=True)
+            subprocess.run(["git", "checkout", branch], check=True, capture_output=True, cwd=str(repo_path))
             logger.debug("git pullを実行中...")
-            subprocess.run(["git", "pull"], check=True, capture_output=True)
+            subprocess.run(["git", "pull"], check=True, capture_output=True, cwd=str(repo_path))
             logger.info("リポジトリの更新が完了しました")
         
         return True
@@ -87,22 +86,23 @@ def commit_and_push(
     Returns:
         成功したかどうか
     """
+    repo_path = repo_path.resolve()
     logger.info(f"Gitコミット・プッシュを開始: branch={branch}")
     logger.debug(f"コミットメッセージ: {commit_message}")
     try:
-        os.chdir(repo_path)
-        
         # ユーザー設定
         logger.debug("Gitユーザー設定中...")
         subprocess.run(
             ["git", "config", "user.name", "GitHub Actions"],
             check=True,
             capture_output=True,
+            cwd=str(repo_path),
         )
         subprocess.run(
             ["git", "config", "user.email", "actions@github.com"],
             check=True,
             capture_output=True,
+            cwd=str(repo_path),
         )
         
         # 変更をステージング
@@ -110,21 +110,28 @@ def commit_and_push(
         if files:
             logger.debug(f"指定ファイルのみステージング: {len(files)}ファイル")
             for file_path in files:
-                if file_path.exists():
+                path_obj = Path(file_path)
+                if path_obj.exists():
+                    try:
+                        relative_path = path_obj.resolve().relative_to(repo_path)
+                    except ValueError:
+                        relative_path = path_obj.resolve()
                     subprocess.run(
-                        ["git", "add", str(file_path.relative_to(repo_path))],
+                        ["git", "add", str(relative_path)],
                         check=True,
                         capture_output=True,
+                        cwd=str(repo_path),
                     )
         else:
             logger.debug("すべての変更をステージング")
-            subprocess.run(["git", "add", "."], check=True, capture_output=True)
+            subprocess.run(["git", "add", "."], check=True, capture_output=True, cwd=str(repo_path))
         
         # 変更があるかチェック
         logger.debug("変更の有無を確認中...")
         result = subprocess.run(
             ["git", "diff", "--cached", "--quiet"],
             capture_output=True,
+            cwd=str(repo_path),
         )
         if result.returncode == 0:
             logger.info("変更がありません。コミットをスキップします。")
@@ -136,6 +143,7 @@ def commit_and_push(
             ["git", "commit", "-m", commit_message],
             check=True,
             capture_output=True,
+            cwd=str(repo_path),
         )
         logger.info("コミットが完了しました")
         
@@ -153,12 +161,14 @@ def commit_and_push(
             ["git", "remote", "set-url", "origin", auth_url],
             check=True,
             capture_output=True,
+            cwd=str(repo_path),
         )
         
         subprocess.run(
             ["git", "push", "origin", branch],
             check=True,
             capture_output=True,
+            cwd=str(repo_path),
         )
         logger.info("プッシュが完了しました")
         
