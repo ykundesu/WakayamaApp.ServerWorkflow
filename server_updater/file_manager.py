@@ -5,10 +5,11 @@
 出力JSONをWakayamaServerの適切なディレクトリに配置
 """
 
+import json
 import logging
 import shutil
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Literal, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -83,4 +84,113 @@ def copy_meals_files(source_dir: Path, target_dir: Path) -> List[Tuple[Path, Pat
     
     logger.info(f"寮食データファイルコピー完了: {len(copied_files)}ファイル")
     return copied_files
+
+
+def load_processed_hashes(server_repo_path: Path, target_name: Literal["meals", "classes"]) -> Set[str]:
+    """
+    サーバーリポジトリから処理済みハッシュを読み込む
+    
+    Args:
+        server_repo_path: サーバーリポジトリのパス
+        target_name: "meals" または "classes"
+    
+    Returns:
+        処理済みハッシュの集合
+    """
+    hash_file = server_repo_path / "v1" / "sources" / "list" / f"{target_name}.json"
+    
+    if not hash_file.exists():
+        logger.debug(f"処理済みハッシュファイルが存在しません: {hash_file}")
+        return set()
+    
+    try:
+        with open(hash_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            processed = data.get("processed", [])
+            if not isinstance(processed, list):
+                logger.warning(f"処理済みハッシュの形式が不正です: {hash_file}")
+                return set()
+            logger.debug(f"処理済みハッシュを読み込みました: {target_name} ({len(processed)}件)")
+            return set(processed)
+    except json.JSONDecodeError as e:
+        logger.warning(f"処理済みハッシュファイルのJSON解析に失敗しました: {hash_file}, エラー: {e}")
+        return set()
+    except Exception as e:
+        logger.warning(f"処理済みハッシュファイルの読み込みに失敗しました: {hash_file}, エラー: {e}")
+        return set()
+
+
+def merge_and_write_processed_hashes(
+    source_hash_file: Path,
+    server_repo_path: Path,
+    target_name: Literal["meals", "classes"],
+) -> Optional[Path]:
+    """
+    処理済みハッシュをマージしてサーバーリポジトリに書き込む
+    
+    Args:
+        source_hash_file: ソースハッシュファイル（output/*_hashes.json）
+        server_repo_path: サーバーリポジトリのパス
+        target_name: "meals" または "classes"
+    
+    Returns:
+        更新されたファイルパス（変更がなかった場合はNone）
+    """
+    if not source_hash_file.exists():
+        logger.debug(f"ソースハッシュファイルが存在しません: {source_hash_file}")
+        return None
+    
+    # ソースファイルを読み込む
+    try:
+        with open(source_hash_file, "r", encoding="utf-8") as f:
+            source_data = json.load(f)
+            source_hashes = source_data.get("processed", [])
+            if not isinstance(source_hashes, list):
+                logger.warning(f"ソースハッシュファイルの形式が不正です: {source_hash_file}")
+                return None
+    except json.JSONDecodeError as e:
+        logger.warning(f"ソースハッシュファイルのJSON解析に失敗しました: {source_hash_file}, エラー: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"ソースハッシュファイルの読み込みに失敗しました: {source_hash_file}, エラー: {e}")
+        return None
+    
+    if not source_hashes:
+        logger.debug(f"ソースハッシュファイルにハッシュが含まれていません: {source_hash_file}")
+        return None
+    
+    # サーバー側ファイルを読み込む
+    target_file = server_repo_path / "v1" / "sources" / "list" / f"{target_name}.json"
+    existing_hashes = set()
+    
+    if target_file.exists():
+        try:
+            with open(target_file, "r", encoding="utf-8") as f:
+                existing_data = json.load(f)
+                existing_hashes = set(existing_data.get("processed", []))
+        except (json.JSONDecodeError, Exception) as e:
+            logger.warning(f"サーバー側ハッシュファイルの読み込みに失敗しました: {target_file}, エラー: {e}")
+            existing_hashes = set()
+    
+    # マージ（重複除去）
+    merged_hashes = existing_hashes | set(source_hashes)
+    
+    # 変更がない場合はスキップ
+    if merged_hashes == existing_hashes:
+        logger.debug(f"ハッシュに変更がありません: {target_name}")
+        return None
+    
+    # ディレクトリを作成
+    target_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    # 書き込み
+    output_data = {"processed": sorted(list(merged_hashes))}
+    try:
+        with open(target_file, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+        logger.info(f"処理済みハッシュを更新しました: {target_name} ({len(existing_hashes)}件 -> {len(merged_hashes)}件)")
+        return target_file
+    except Exception as e:
+        logger.error(f"処理済みハッシュファイルの書き込みに失敗しました: {target_file}, エラー: {e}")
+        return None
 

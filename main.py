@@ -5,12 +5,13 @@
 スクレイピング→処理→更新→通知の一連の流れを実行
 """
 
+import json
 import os
 import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Set
 
 # パスを追加
 sys.path.insert(0, str(Path(__file__).parent))
@@ -25,10 +26,15 @@ logger = logging.getLogger(__name__)
 
 from scraper.dormitory_scraper import scrape_dormitory_page
 from scraper.classes_scraper import scrape_classes_page
-from scraper.pdf_downloader import download_pdf, check_pdf_updated
+from scraper.pdf_downloader import download_pdf, check_pdf_updated, get_file_hash
 from processors.classes_processor import process_classes_pdf
 from processors.meals_processor import process_meals_pdf
-from server_updater.file_manager import copy_final_files, copy_meals_files
+from server_updater.file_manager import (
+    copy_final_files,
+    copy_meals_files,
+    load_processed_hashes,
+    merge_and_write_processed_hashes,
+)
 from server_updater.git_updater import init_git_repo, commit_and_push
 from notifier.discord import notify_success, notify_error, notify_no_update
 
@@ -41,10 +47,20 @@ def process_dormitory_meals(
     use_yomitoku: bool = False,
     discord_webhook: Optional[str] = None,
     prompt_file: Optional[Path] = None,
-) -> bool:
-    """寮食PDFの処理"""
+    processed_hashes: Optional[Set[str]] = None,
+) -> tuple[bool, List[str]]:
+    """寮食PDFの処理
+    
+    Returns:
+        (成功したかどうか, 処理済みPDFのハッシュリスト)
+    """
     logger.info("寮食PDF処理を開始します")
     logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
+    if processed_hashes is None:
+        processed_hashes = set()
+    
+    collected_hashes: List[str] = []
+    
     try:
         logger.info("寮食ページをスクレイピング中...")
         pdf_infos = scrape_dormitory_page()
@@ -53,7 +69,7 @@ def process_dormitory_meals(
             logger.warning("寮食PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "meals", "PDFリンクが見つかりませんでした。")
-            return False
+            return False, collected_hashes
         
         logger.info(f"PDFリンクを{len(pdf_infos)}件見つけました")
 
@@ -65,6 +81,7 @@ def process_dormitory_meals(
         processed: List[Dict[str, str]] = []
         skipped_existing: List[str] = []
         skipped_not_updated: List[str] = []
+        skipped_processed: List[str] = []
         had_error = False
         
         for index, pdf_info in enumerate(pdf_infos, start=1):
@@ -93,23 +110,59 @@ def process_dormitory_meals(
             
             pdf_path = pdf_dir / f"meals_{label}.pdf"
             
-            # 更新チェック
-            logger.debug(f"{label} のPDF更新チェックを実行中...")
-            is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
-            if not is_updated:
-                msg = f"{label} のPDFが更新されていません。"
-                logger.info(msg)
-                skipped_not_updated.append(label)
-                continue
-            
-            logger.info(f"{label} のPDFをダウンロード中...")
-            if not download_pdf(pdf_url, pdf_path):
-                error_message = f"{label} のPDFのダウンロードに失敗しました。"
-                logger.error(error_message)
-                had_error = True
-                if discord_webhook:
-                    notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
-                continue
+            # 一時DLしてハッシュチェック
+            logger.debug(f"{label} のPDFを一時ダウンロードしてハッシュを確認中...")
+            temp_path = pdf_path.with_suffix(".tmp")
+            if not download_pdf(pdf_url, temp_path):
+                logger.warning(f"{label} のPDFの一時ダウンロードに失敗しました。フォールバックとして既存の更新チェックを使用します。")
+                # フォールバック: 既存の更新チェックを使用
+                is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
+                if not is_updated:
+                    msg = f"{label} のPDFが更新されていません。"
+                    logger.info(msg)
+                    skipped_not_updated.append(label)
+                    continue
+                
+                logger.info(f"{label} のPDFをダウンロード中...")
+                if not download_pdf(pdf_url, pdf_path):
+                    error_message = f"{label} のPDFのダウンロードに失敗しました。"
+                    logger.error(error_message)
+                    had_error = True
+                    if discord_webhook:
+                        notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
+                    continue
+            else:
+                # ハッシュを計算
+                pdf_hash = get_file_hash(temp_path)
+                if pdf_hash:
+                    if pdf_hash in processed_hashes:
+                        logger.info(f"{label} のPDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
+                        skipped_processed.append(label)
+                        temp_path.unlink(missing_ok=True)
+                        continue
+                    
+                    logger.info(f"{label} のPDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
+                    # 一時ファイルを正式ファイルに移動
+                    temp_path.replace(pdf_path)
+                else:
+                    logger.warning(f"{label} のPDFのハッシュ計算に失敗しました。フォールバックとして既存の更新チェックを使用します。")
+                    temp_path.unlink(missing_ok=True)
+                    # フォールバック: 既存の更新チェックを使用
+                    is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
+                    if not is_updated:
+                        msg = f"{label} のPDFが更新されていません。"
+                        logger.info(msg)
+                        skipped_not_updated.append(label)
+                        continue
+                    
+                    logger.info(f"{label} のPDFをダウンロード中...")
+                    if not download_pdf(pdf_url, pdf_path):
+                        error_message = f"{label} のPDFのダウンロードに失敗しました。"
+                        logger.error(error_message)
+                        had_error = True
+                        if discord_webhook:
+                            notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
+                        continue
             
             logger.info(f"{label} のPDFダウンロードが完了しました")
             
@@ -127,6 +180,12 @@ def process_dormitory_meals(
             
             if success:
                 logger.info(f"{label} の寮食PDF処理が完了しました。")
+                # ハッシュを収集
+                pdf_hash = get_file_hash(pdf_path)
+                if pdf_hash:
+                    collected_hashes.append(pdf_hash)
+                    logger.debug(f"{label} のハッシュを収集しました: {pdf_hash[:16]}...")
+                
                 processed.append(
                     {
                         "label": label,
@@ -141,7 +200,7 @@ def process_dormitory_meals(
                 if discord_webhook:
                     notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
         
-        logger.info(f"処理結果: 成功={len(processed)}, スキップ(既存)={len(skipped_existing)}, スキップ(未更新)={len(skipped_not_updated)}, エラー={'あり' if had_error else 'なし'}")
+        logger.info(f"処理結果: 成功={len(processed)}, スキップ(既存)={len(skipped_existing)}, スキップ(未更新)={len(skipped_not_updated)}, スキップ(処理済み)={len(skipped_processed)}, エラー={'あり' if had_error else 'なし'}")
         
         if processed:
             logger.info(f"{len(processed)}件のPDF処理が完了しました")
@@ -151,7 +210,7 @@ def process_dormitory_meals(
                     "出力ディレクトリ": "\n".join(p["out_dir"] for p in processed),
                 }
                 notify_success(discord_webhook, "meals", details)
-            return True
+            return True, collected_hashes
         
         if not had_error and discord_webhook:
             reasons = []
@@ -159,17 +218,19 @@ def process_dormitory_meals(
                 reasons.append("既存データ: " + ", ".join(skipped_existing))
             if skipped_not_updated:
                 reasons.append("未更新: " + ", ".join(skipped_not_updated))
+            if skipped_processed:
+                reasons.append("処理済み: " + ", ".join(skipped_processed))
             if not reasons:
                 reasons.append("処理可能なPDFがありませんでした。")
             notify_no_update(discord_webhook, "meals", "\n".join(reasons))
         
         logger.info("寮食PDF処理を完了しました（処理対象なし）")
-        return False
+        return False, collected_hashes
     except Exception as e:
         logger.exception(f"寮食処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "meals", str(e))
-        return False
+        return False, collected_hashes
 
 
 def process_classes(
@@ -179,10 +240,18 @@ def process_classes(
     dpi: int = 220,
     use_yomitoku: bool = False,
     discord_webhook: Optional[str] = None,
-) -> bool:
-    """授業PDFの処理"""
+    processed_hashes: Optional[Set[str]] = None,
+) -> tuple[bool, Optional[str]]:
+    """授業PDFの処理
+    
+    Returns:
+        (成功したかどうか, 処理済みPDFのハッシュ)
+    """
     logger.info("授業PDF処理を開始します")
     logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
+    if processed_hashes is None:
+        processed_hashes = set()
+    
     try:
         logger.info("授業ページをスクレイピング中...")
         pdf_url = scrape_classes_page()
@@ -191,7 +260,7 @@ def process_classes(
             logger.warning("授業PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "classes", "PDFリンクが見つかりませんでした。")
-            return False
+            return False, None
         
         logger.info(f"PDF URL: {pdf_url}")
         
@@ -200,21 +269,56 @@ def process_classes(
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         logger.debug(f"PDF保存先: {pdf_path}")
         
-        # 更新チェック
-        logger.debug("PDF更新チェックを実行中...")
-        is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
-        if not is_updated:
-            logger.info("PDFが更新されていません。")
-            if discord_webhook:
-                notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-            return False
-        
-        logger.info("PDFをダウンロード中...")
-        if not download_pdf(pdf_url, pdf_path):
-            logger.error("PDFのダウンロードに失敗しました。")
-            if discord_webhook:
-                notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
-            return False
+        # 一時DLしてハッシュチェック
+        logger.debug("PDFを一時ダウンロードしてハッシュを確認中...")
+        temp_path = pdf_path.with_suffix(".tmp")
+        if not download_pdf(pdf_url, temp_path):
+            logger.warning("PDFの一時ダウンロードに失敗しました。フォールバックとして既存の更新チェックを使用します。")
+            # フォールバック: 既存の更新チェックを使用
+            is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
+            if not is_updated:
+                logger.info("PDFが更新されていません。")
+                if discord_webhook:
+                    notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
+                return False, None
+            
+            logger.info("PDFをダウンロード中...")
+            if not download_pdf(pdf_url, pdf_path):
+                logger.error("PDFのダウンロードに失敗しました。")
+                if discord_webhook:
+                    notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
+                return False, None
+        else:
+            # ハッシュを計算
+            pdf_hash = get_file_hash(temp_path)
+            if pdf_hash:
+                if pdf_hash in processed_hashes:
+                    logger.info(f"PDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
+                    if discord_webhook:
+                        notify_no_update(discord_webhook, "classes", "PDFは既に処理済みです。")
+                    temp_path.unlink(missing_ok=True)
+                    return False, None
+                
+                logger.info(f"PDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
+                # 一時ファイルを正式ファイルに移動
+                temp_path.replace(pdf_path)
+            else:
+                logger.warning("PDFのハッシュ計算に失敗しました。フォールバックとして既存の更新チェックを使用します。")
+                temp_path.unlink(missing_ok=True)
+                # フォールバック: 既存の更新チェックを使用
+                is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
+                if not is_updated:
+                    logger.info("PDFが更新されていません。")
+                    if discord_webhook:
+                        notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
+                    return False, None
+                
+                logger.info("PDFをダウンロード中...")
+                if not download_pdf(pdf_url, pdf_path):
+                    logger.error("PDFのダウンロードに失敗しました。")
+                    if discord_webhook:
+                        notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
+                    return False, None
         
         logger.info("PDFダウンロードが完了しました")
         
@@ -232,23 +336,25 @@ def process_classes(
         
         if success:
             logger.info("授業PDF処理が完了しました。")
+            # ハッシュを収集
+            pdf_hash = get_file_hash(pdf_path)
             if discord_webhook:
                 notify_success(
                     discord_webhook,
                     "classes",
                     {"処理済みPDF": pdf_url, "出力ディレクトリ": str(classes_output_dir)},
                 )
+            return True, pdf_hash
         else:
             logger.error("授業PDF処理に失敗しました。")
             if discord_webhook:
                 notify_error(discord_webhook, "classes", "PDF処理に失敗しました。")
-        
-        return success
+            return False, None
     except Exception as e:
         logger.exception(f"授業処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "classes", str(e))
-        return False
+        return False, None
 
 
 def update_server(
@@ -297,13 +403,35 @@ def update_server(
         else:
             logger.debug("寮食データディレクトリが存在しません")
         
-        if not copied_files:
+        # 処理済みハッシュをマージ
+        hash_files_updated = 0
+        meals_hash_file = output_dir / "meals_hashes.json"
+        classes_hash_file = output_dir / "classes_hashes.json"
+        
+        if meals_hash_file.exists():
+            logger.info("寮食の処理済みハッシュをマージ中...")
+            updated_file = merge_and_write_processed_hashes(meals_hash_file, server_repo_path, "meals")
+            if updated_file:
+                hash_files_updated += 1
+                logger.info(f"寮食の処理済みハッシュを更新しました: {updated_file}")
+        
+        if classes_hash_file.exists():
+            logger.info("授業の処理済みハッシュをマージ中...")
+            updated_file = merge_and_write_processed_hashes(classes_hash_file, server_repo_path, "classes")
+            if updated_file:
+                hash_files_updated += 1
+                logger.info(f"授業の処理済みハッシュを更新しました: {updated_file}")
+        
+        if not copied_files and hash_files_updated == 0:
             logger.info("更新するファイルがありません。")
             return True
         
         # コミット＆プッシュ
         logger.info("変更をコミット・プッシュ中...")
-        commit_message = f"Actions: {classes_copied_counter}の授業ファイルと{meals_copied_counter}の寮食ファイルを更新 by Github Actions"
+        commit_message_parts = [f"Actions: {classes_copied_counter}の授業ファイルと{meals_copied_counter}の寮食ファイルを更新"]
+        if hash_files_updated > 0:
+            commit_message_parts.append(f"{hash_files_updated}件の処理済みハッシュを更新")
+        commit_message = " ".join(commit_message_parts) + " by Github Actions"
         logger.debug(f"コミットメッセージ: {commit_message}")
         success = commit_and_push(
             repo_path=server_repo_path,
@@ -370,12 +498,34 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     logger.debug(f"出力ディレクトリを作成しました: {output_dir}")
     
+    # 処理前にserver_repoを初期化してハッシュを読み込む
+    meals_processed_hashes: Set[str] = set()
+    classes_processed_hashes: Set[str] = set()
+    
+    if args.update_server and (args.process in ["meals", "classes", "all"]):
+        if github_token and args.server_repo_url:
+            logger.info("処理前に既処理ハッシュを読み込み中...")
+            server_repo_path = args.server_repo_path or output_dir / "server_repo"
+            if init_git_repo(server_repo_path, github_token, args.server_repo_url, args.branch):
+                if args.process in ["meals", "all"]:
+                    meals_processed_hashes = load_processed_hashes(server_repo_path, "meals")
+                    logger.info(f"寮食の既処理ハッシュ: {len(meals_processed_hashes)}件")
+                if args.process in ["classes", "all"]:
+                    classes_processed_hashes = load_processed_hashes(server_repo_path, "classes")
+                    logger.info(f"授業の既処理ハッシュ: {len(classes_processed_hashes)}件")
+            else:
+                logger.warning("server_repoの初期化に失敗しました。ハッシュチェックをスキップします。")
+        else:
+            logger.debug("server_repoの情報が不足しているため、ハッシュチェックをスキップします。")
+    
     success = True
+    meals_collected_hashes: List[str] = []
+    classes_collected_hash: Optional[str] = None
     
     # 処理実行
     if args.process in ["meals", "all"]:
         logger.info("--- 寮食処理を開始 ---")
-        success &= process_dormitory_meals(
+        meals_success, collected = process_dormitory_meals(
             output_dir=output_dir,
             api_key=api_key,
             model=args.model,
@@ -383,20 +533,45 @@ def main():
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
             prompt_file=args.prompt_file,
+            processed_hashes=meals_processed_hashes,
         )
+        success &= meals_success
+        meals_collected_hashes = collected
         logger.info("--- 寮食処理を完了 ---")
     
     if args.process in ["classes", "all"]:
         logger.info("--- 授業処理を開始 ---")
-        success &= process_classes(
+        classes_success, collected_hash = process_classes(
             output_dir=output_dir,
             api_key=api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
+            processed_hashes=classes_processed_hashes,
         )
+        success &= classes_success
+        classes_collected_hash = collected_hash
         logger.info("--- 授業処理を完了 ---")
+    
+    # 処理済みハッシュをファイルに保存
+    if meals_collected_hashes:
+        meals_hash_file = output_dir / "meals_hashes.json"
+        try:
+            with open(meals_hash_file, "w", encoding="utf-8") as f:
+                json.dump({"processed": meals_collected_hashes}, f, ensure_ascii=False, indent=2)
+            logger.info(f"寮食の処理済みハッシュを保存しました: {meals_hash_file} ({len(meals_collected_hashes)}件)")
+        except Exception as e:
+            logger.warning(f"寮食の処理済みハッシュの保存に失敗しました: {e}")
+    
+    if classes_collected_hash:
+        classes_hash_file = output_dir / "classes_hashes.json"
+        try:
+            with open(classes_hash_file, "w", encoding="utf-8") as f:
+                json.dump({"processed": [classes_collected_hash]}, f, ensure_ascii=False, indent=2)
+            logger.info(f"授業の処理済みハッシュを保存しました: {classes_hash_file}")
+        except Exception as e:
+            logger.warning(f"授業の処理済みハッシュの保存に失敗しました: {e}")
     
     # サーバー更新
     if args.update_server and success:
