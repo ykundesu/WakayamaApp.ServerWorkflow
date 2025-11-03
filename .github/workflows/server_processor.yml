@@ -31,13 +31,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
         run: |
-          python main.py \
+          python -X utf8 main.py \
             --process all \
             --output-dir ./output \
             --model gemini-2.5-pro \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main
+            --use-yomitoku
       
       - name: Upload output artifacts
         if: always()

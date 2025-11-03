@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import re
+import logging
 import unicodedata
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,6 +13,8 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 DORMITORY_URL = "https://www.wakayama-nct.ac.jp/campuslife/dormitory/restaurant/"
 
@@ -213,16 +216,28 @@ def find_current_and_next_pdf_links(html: str, base_url: str) -> List[Dict[str, 
 
 def scrape_dormitory_page() -> List[Dict[str, Any]]:
     """Fetch the dormitory page and return target PDF metadata."""
+    logger.info(f"寮食ページをスクレイピング中: {DORMITORY_URL}")
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
+        logger.debug("HTTPリクエスト送信中...")
         response = requests.get(DORMITORY_URL, headers=headers, timeout=30)
         response.raise_for_status()
-        return find_current_and_next_pdf_links(response.text, DORMITORY_URL)
+        logger.debug(f"レスポンス受信: ステータス={response.status_code}, サイズ={len(response.text)}文字")
+        
+        logger.debug("PDFリンクを検索中...")
+        result = find_current_and_next_pdf_links(response.text, DORMITORY_URL)
+        logger.info(f"PDFリンクを{len(result)}件見つけました")
+        
+        if result:
+            for pdf_info in result:
+                logger.debug(f"PDF情報: {pdf_info.get('date')} ({pdf_info.get('year')}-{pdf_info.get('month')}) -> {pdf_info.get('url')}")
+        
+        return result
     except requests.RequestException as exc:
-        print(f"[dormitory] failed to fetch dormitory page: {exc}")
+        logger.error(f"[dormitory] 寮食ページの取得に失敗: {exc}", exc_info=True)
     except Exception as exc:  # pragma: no cover - safeguard
-        print(f"[dormitory] unexpected error: {exc}")
+        logger.error(f"[dormitory] 予期しないエラー: {exc}", exc_info=True)
     return []
 

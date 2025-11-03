@@ -9,10 +9,13 @@ import os
 import json
 import base64
 import io
+import logging
 from typing import Any, Dict, List, Optional, Union
 from PIL import Image
 
 from .json_extractor import try_json_loads, JsonType
+
+logger = logging.getLogger(__name__)
 
 # Gemini API用
 try:
@@ -49,6 +52,7 @@ class GeminiCaller:
     
     def __init__(self, model_name: str, api_key: Optional[str] = None,
                  schema: Optional[Dict[str, Any]] = None, temperature: float = 0.6):
+        logger.info(f"GeminiCallerを初期化中: model={model_name}, temperature={temperature}")
         if not _gemini_available:
             raise RuntimeError("google-genai パッケージがインストールされていません。")
         
@@ -56,6 +60,7 @@ class GeminiCaller:
         if not api_key:
             raise RuntimeError("APIキーが見つかりません。--api-key 引数か GOOGLE_API_KEY 環境変数を設定してください。")
         
+        logger.debug("Gemini APIクライアントを作成中...")
         self.client = genai.Client(api_key=api_key)
         self.model_name = model_name
         self.schema = schema
@@ -67,29 +72,40 @@ class GeminiCaller:
             # 構造化出力: JSON固定 & スキーマ強制
             cfg_kwargs["response_mime_type"] = "application/json"
             cfg_kwargs["response_schema"] = schema
+            logger.debug("構造化出力スキーマを設定しました")
         self.gen_config = types.GenerateContentConfig(**cfg_kwargs)
+        logger.info("GeminiCallerの初期化が完了しました")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10),
            retry=retry_if_exception_type(Exception))
     def generate(self, prompt: str, images: List[Image.Image]) -> JsonType:
+        logger.info(f"Gemini API呼び出し中: model={self.model_name}, 画像数={len(images)}")
+        logger.debug(f"プロンプト長: {len(prompt)}文字")
         # google-genai: Client 経由で呼ぶ
         parts = [prompt] + images
-        resp = self.client.models.generate_content(
-            model=self.model_name,
-            contents=parts,
-            config=types.GenerateContentConfig(
-                temperature=self.temperature,
-                thinking_config=types.ThinkingConfig(thinking_budget=32768),
-                response_mime_type=self.gen_config.response_mime_type if getattr(self.gen_config, "response_mime_type", None) else None,
-                response_schema=self.gen_config.response_schema if getattr(self.gen_config, "response_schema", None) else None,
-            ),
-        )
-        # 構造化出力時は JSON 文字列になる想定
-        text = getattr(resp, "text", None) or (resp.candidates[0].content.parts[0].text if resp and resp.candidates and resp.candidates[0].content.parts else "")
-        if not text:
-            # 念のため raw を覗く
-            text = str(resp)
-        return try_json_loads(text)
+        try:
+            resp = self.client.models.generate_content(
+                model=self.model_name,
+                contents=parts,
+                config=types.GenerateContentConfig(
+                    temperature=self.temperature,
+                    thinking_config=types.ThinkingConfig(thinking_budget=32768),
+                    response_mime_type=self.gen_config.response_mime_type if getattr(self.gen_config, "response_mime_type", None) else None,
+                    response_schema=self.gen_config.response_schema if getattr(self.gen_config, "response_schema", None) else None,
+                ),
+            )
+            # 構造化出力時は JSON 文字列になる想定
+            text = getattr(resp, "text", None) or (resp.candidates[0].content.parts[0].text if resp and resp.candidates and resp.candidates[0].content.parts else "")
+            if not text:
+                # 念のため raw を覗く
+                text = str(resp)
+            logger.debug(f"APIレスポンス受信: レスポンス長={len(text)}文字")
+            result = try_json_loads(text)
+            logger.info("Gemini API呼び出しが成功しました")
+            return result
+        except Exception as e:
+            logger.error(f"Gemini API呼び出しエラー: {e}", exc_info=True)
+            raise
 
 
 class OpenRouterCaller:
@@ -99,6 +115,7 @@ class OpenRouterCaller:
     
     def __init__(self, model: str, api_key: Optional[str] = None,
                  temperature: float = 0.2, max_tokens: int = 2000):
+        logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}, max_tokens={max_tokens}")
         if not _requests_available:
             raise RuntimeError("requests パッケージがインストールされていません。")
         
@@ -110,6 +127,7 @@ class OpenRouterCaller:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        logger.info("OpenRouterCallerの初期化が完了しました")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10),
            retry=retry_if_exception_type(Exception))
@@ -120,6 +138,8 @@ class OpenRouterCaller:
         OpenAI互換のChat Completionsに data URL で画像を渡す。
         モデルは画像対応のものを使うこと（例: openai/gpt-4o-mini 等）。
         """
+        logger.info(f"OpenRouter API呼び出し中: model={self.model}, 画像数={len(images)}")
+        logger.debug(f"プロンプト長: {len(prompt_text)}文字, 画像キー: {list(images.keys())}")
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -149,9 +169,16 @@ class OpenRouterCaller:
         if extra_body:
             body.update(extra_body)
 
-        resp = requests.post(self.OPENROUTER_API_URL, headers=headers, data=json.dumps(body), timeout=120)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            resp = requests.post(self.OPENROUTER_API_URL, headers=headers, data=json.dumps(body), timeout=120)
+            resp.raise_for_status()
+            result = resp.json()
+            logger.info("OpenRouter API呼び出しが成功しました")
+            logger.debug(f"レスポンス受信: {len(str(result))}文字")
+            return result
+        except Exception as e:
+            logger.error(f"OpenRouter API呼び出しエラー: {e}", exc_info=True)
+            raise
 
 
 def call_gemini_multimodal(
@@ -168,6 +195,9 @@ def call_gemini_multimodal(
     Google Generative Language API (Gemini) へマルチモーダルで投げる。
     model 例: "gemini-2.5-flash" など。
     """
+    logger.info(f"Gemini Multimodal API呼び出し中: model={model}, 画像数={len(images)}")
+    logger.debug(f"プロンプト長: {len(prompt_text)}文字, 画像キー: {list(images.keys())}")
+    
     def pil_to_b64_png(im: Image.Image) -> str:
         buf = io.BytesIO()
         im.save(buf, format="PNG")
@@ -216,7 +246,13 @@ def call_gemini_multimodal(
     if extra_headers:
         headers.update(extra_headers)
 
-    resp = requests.post(url, headers=headers, params=params, data=json.dumps({"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}), timeout=120)
-    resp.raise_for_status()
-    return resp.json()
+    try:
+        resp = requests.post(url, headers=headers, params=params, data=json.dumps({"contents": [{"role": "user", "parts": parts}], "generationConfig": gen_cfg}), timeout=120)
+        resp.raise_for_status()
+        result = resp.json()
+        logger.info("Gemini Multimodal API呼び出しが成功しました")
+        return result
+    except Exception as e:
+        logger.error(f"Gemini Multimodal API呼び出しエラー: {e}", exc_info=True)
+        raise
 

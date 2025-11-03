@@ -8,11 +8,20 @@
 import os
 import sys
 import argparse
+import logging
 from pathlib import Path
 from typing import Optional, List, Dict
 
 # パスを追加
 sys.path.insert(0, str(Path(__file__).parent))
+
+# ログ設定
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 from scraper.dormitory_scraper import scrape_dormitory_page
 from scraper.classes_scraper import scrape_classes_page
@@ -34,19 +43,24 @@ def process_dormitory_meals(
     prompt_file: Optional[Path] = None,
 ) -> bool:
     """寮食PDFの処理"""
+    logger.info("寮食PDF処理を開始します")
+    logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
     try:
-        print("寮食ページをスクレイピング中...")
+        logger.info("寮食ページをスクレイピング中...")
         pdf_infos = scrape_dormitory_page()
         
         if not pdf_infos:
-            print("寮食PDFリンクが見つかりませんでした。")
+            logger.warning("寮食PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "meals", "PDFリンクが見つかりませんでした。")
             return False
+        
+        logger.info(f"PDFリンクを{len(pdf_infos)}件見つけました")
 
         pdf_dir = output_dir / "pdfs"
         pdf_dir.mkdir(parents=True, exist_ok=True)
         meals_output_root = output_dir / "meals_output"
+        logger.debug(f"出力ディレクトリ: pdf_dir={pdf_dir}, meals_output_root={meals_output_root}")
         
         processed: List[Dict[str, str]] = []
         skipped_existing: List[str] = []
@@ -56,7 +70,7 @@ def process_dormitory_meals(
         for index, pdf_info in enumerate(pdf_infos, start=1):
             pdf_url = pdf_info.get("url")
             if not pdf_url:
-                print(f"URLが取得できなかったエントリをスキップします: {pdf_info}")
+                logger.warning(f"URLが取得できなかったエントリをスキップします: {pdf_info}")
                 continue
             
             date_label = pdf_info.get("date")
@@ -68,35 +82,39 @@ def process_dormitory_meals(
             label = (date_label or fallback_label).replace("/", "-").replace(" ", "_")
             target_label = pdf_info.get("target", "unknown")
             
-            print(f"処理対象 ({target_label}): {label} -> {pdf_url}")
+            logger.info(f"処理対象 ({target_label}): {label} -> {pdf_url}")
             
             month_output_dir = meals_output_root / label
             meals_dir = month_output_dir / "meals"
             if meals_dir.exists() and any(meals_dir.glob("*.json")):
-                print(f"{label} の既存データが見つかったため処理をスキップします。")
+                logger.info(f"{label} の既存データが見つかったため処理をスキップします。")
                 skipped_existing.append(label)
                 continue
             
             pdf_path = pdf_dir / f"meals_{label}.pdf"
             
             # 更新チェック
+            logger.debug(f"{label} のPDF更新チェックを実行中...")
             is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
             if not is_updated:
                 msg = f"{label} のPDFが更新されていません。"
-                print(msg)
+                logger.info(msg)
                 skipped_not_updated.append(label)
                 continue
             
+            logger.info(f"{label} のPDFをダウンロード中...")
             if not download_pdf(pdf_url, pdf_path):
                 error_message = f"{label} のPDFのダウンロードに失敗しました。"
-                print(error_message)
+                logger.error(error_message)
                 had_error = True
                 if discord_webhook:
                     notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
                 continue
             
+            logger.info(f"{label} のPDFダウンロードが完了しました")
+            
             # PDF処理
-            print(f"{label} の寮食PDFを処理中...")
+            logger.info(f"{label} の寮食PDFを処理中...")
             success = process_meals_pdf(
                 pdf_path=str(pdf_path),
                 out_dir=month_output_dir,
@@ -108,7 +126,7 @@ def process_dormitory_meals(
             )
             
             if success:
-                print(f"{label} の寮食PDF処理が完了しました。")
+                logger.info(f"{label} の寮食PDF処理が完了しました。")
                 processed.append(
                     {
                         "label": label,
@@ -118,12 +136,15 @@ def process_dormitory_meals(
                 )
             else:
                 error_message = f"{label} のPDF処理に失敗しました。"
-                print(error_message)
+                logger.error(error_message)
                 had_error = True
                 if discord_webhook:
                     notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
         
+        logger.info(f"処理結果: 成功={len(processed)}, スキップ(既存)={len(skipped_existing)}, スキップ(未更新)={len(skipped_not_updated)}, エラー={'あり' if had_error else 'なし'}")
+        
         if processed:
+            logger.info(f"{len(processed)}件のPDF処理が完了しました")
             if discord_webhook:
                 details = {
                     "処理済みPDF": "\n".join(f"{p['label']}: {p['url']}" for p in processed),
@@ -142,9 +163,10 @@ def process_dormitory_meals(
                 reasons.append("処理可能なPDFがありませんでした。")
             notify_no_update(discord_webhook, "meals", "\n".join(reasons))
         
+        logger.info("寮食PDF処理を完了しました（処理対象なし）")
         return False
     except Exception as e:
-        print(f"寮食処理エラー: {e}")
+        logger.exception(f"寮食処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "meals", str(e))
         return False
@@ -159,38 +181,45 @@ def process_classes(
     discord_webhook: Optional[str] = None,
 ) -> bool:
     """授業PDFの処理"""
+    logger.info("授業PDF処理を開始します")
+    logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
     try:
-        print("授業ページをスクレイピング中...")
+        logger.info("授業ページをスクレイピング中...")
         pdf_url = scrape_classes_page()
         
         if not pdf_url:
-            print("授業PDFリンクが見つかりませんでした。")
+            logger.warning("授業PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "classes", "PDFリンクが見つかりませんでした。")
             return False
         
-        print(f"PDF URL: {pdf_url}")
+        logger.info(f"PDF URL: {pdf_url}")
         
         # PDFダウンロード
         pdf_path = output_dir / "pdfs" / "classes.pdf"
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"PDF保存先: {pdf_path}")
         
         # 更新チェック
+        logger.debug("PDF更新チェックを実行中...")
         is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
         if not is_updated:
-            print("PDFが更新されていません。")
+            logger.info("PDFが更新されていません。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
             return False
         
+        logger.info("PDFをダウンロード中...")
         if not download_pdf(pdf_url, pdf_path):
-            print("PDFのダウンロードに失敗しました。")
+            logger.error("PDFのダウンロードに失敗しました。")
             if discord_webhook:
                 notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
             return False
         
+        logger.info("PDFダウンロードが完了しました")
+        
         # PDF処理
-        print("授業PDFを処理中...")
+        logger.info("授業PDFを処理中...")
         classes_output_dir = output_dir / "classes_output"
         success = process_classes_pdf(
             pdf_path=str(pdf_path),
@@ -202,7 +231,7 @@ def process_classes(
         )
         
         if success:
-            print("授業PDF処理が完了しました。")
+            logger.info("授業PDF処理が完了しました。")
             if discord_webhook:
                 notify_success(
                     discord_webhook,
@@ -210,12 +239,13 @@ def process_classes(
                     {"処理済みPDF": pdf_url, "出力ディレクトリ": str(classes_output_dir)},
                 )
         else:
+            logger.error("授業PDF処理に失敗しました。")
             if discord_webhook:
                 notify_error(discord_webhook, "classes", "PDF処理に失敗しました。")
         
         return success
     except Exception as e:
-        print(f"授業処理エラー: {e}")
+        logger.exception(f"授業処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "classes", str(e))
         return False
@@ -229,10 +259,15 @@ def update_server(
     branch: str = "main",
 ) -> bool:
     """WakayamaServerを更新"""
+    logger.info("WakayamaServer更新を開始します")
+    logger.debug(f"パラメータ: repo_url={repo_url}, branch={branch}, server_repo_path={server_repo_path}")
     try:
-        print("WakayamaServerリポジトリを初期化中...")
+        logger.info("WakayamaServerリポジトリを初期化中...")
         if not init_git_repo(server_repo_path, github_token, repo_url, branch):
+            logger.error("Gitリポジトリの初期化に失敗しました")
             return False
+        
+        logger.info("Gitリポジトリの初期化が完了しました")
         
         # ファイルをコピー
         classes_output_dir = output_dir / "classes_output"
@@ -243,40 +278,57 @@ def update_server(
         meals_copied_counter = 0
         
         if classes_output_dir.exists():
+            logger.info("授業データファイルをコピー中...")
             classes_target = server_repo_path / "v1" / "classes"
             copied = copy_final_files(classes_output_dir, classes_target)
             copied_files.extend(copied)
             classes_copied_counter = len(copied)
-            print(f"授業データ: {len(copied)}ファイルをコピーしました。")
+            logger.info(f"授業データ: {len(copied)}ファイルをコピーしました。")
+        else:
+            logger.debug("授業データディレクトリが存在しません")
         
         if meals_output_dir.exists():
+            logger.info("寮食データファイルをコピー中...")
             meals_target = server_repo_path / "v1" / "meals"
             copied = copy_meals_files(meals_output_dir, meals_target)
             copied_files.extend(copied)
             meals_copied_counter = len(copied)
-            print(f"寮食データ: {len(copied)}ファイルをコピーしました。")
+            logger.info(f"寮食データ: {len(copied)}ファイルをコピーしました。")
+        else:
+            logger.debug("寮食データディレクトリが存在しません")
         
         if not copied_files:
-            print("更新するファイルがありません。")
+            logger.info("更新するファイルがありません。")
             return True
         
         # コミット＆プッシュ
-        print("変更をコミット・プッシュ中...")
+        logger.info("変更をコミット・プッシュ中...")
+        commit_message = f"Actions: {classes_copied_counter}の授業ファイルと{meals_copied_counter}の寮食ファイルを更新 by Github Actions"
+        logger.debug(f"コミットメッセージ: {commit_message}")
         success = commit_and_push(
             repo_path=server_repo_path,
             github_token=github_token,
             repo_url=repo_url,
             branch=branch,
-            commit_message=f"Actions: {classes_copied_counter}の授業ファイルと{meals_copied_counter}の寮食ファイルを更新 by Github Actions",
+            commit_message=commit_message,
         )
+        
+        if success:
+            logger.info("サーバー更新が完了しました")
+        else:
+            logger.error("サーバー更新に失敗しました")
         
         return success
     except Exception as e:
-        print(f"サーバー更新エラー: {e}")
+        logger.exception(f"サーバー更新エラー: {e}")
         return False
 
 
 def main():
+    logger.info("=" * 60)
+    logger.info("ServerProcesser自動化ワークフローを開始します")
+    logger.info("=" * 60)
+    
     parser = argparse.ArgumentParser(description="ServerProcesser自動化ワークフロー")
     parser.add_argument("--process", choices=["meals", "classes", "all"], default="all", help="処理タイプ")
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
@@ -294,22 +346,35 @@ def main():
     
     args = parser.parse_args()
     
+    logger.info(f"処理タイプ: {args.process}")
+    logger.info(f"使用モデル: {args.model}")
+    logger.info(f"DPI: {args.dpi}")
+    logger.info(f"Yomitoku OCR: {'有効' if args.use_yomitoku else '無効'}")
+    logger.info(f"出力ディレクトリ: {args.output_dir}")
+    logger.info(f"サーバー更新: {'有効' if args.update_server else '無効'}")
+    
     # 環境変数から取得
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
     discord_webhook = args.discord_webhook or os.getenv("DISCORD_WEBHOOK_URL")
     github_token = args.github_token or os.getenv("GITHUB_TOKEN")
     
+    logger.debug(f"環境変数取得状況: API_KEY={'設定済み' if api_key else '未設定'}, "
+                 f"DISCORD_WEBHOOK={'設定済み' if discord_webhook else '未設定'}, "
+                 f"GITHUB_TOKEN={'設定済み' if github_token else '未設定'}")
+    
     if not api_key:
-        print("エラー: APIキーが設定されていません。")
+        logger.error("APIキーが設定されていません。")
         sys.exit(1)
     
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    logger.debug(f"出力ディレクトリを作成しました: {output_dir}")
     
     success = True
     
     # 処理実行
     if args.process in ["meals", "all"]:
+        logger.info("--- 寮食処理を開始 ---")
         success &= process_dormitory_meals(
             output_dir=output_dir,
             api_key=api_key,
@@ -319,8 +384,10 @@ def main():
             discord_webhook=discord_webhook,
             prompt_file=args.prompt_file,
         )
+        logger.info("--- 寮食処理を完了 ---")
     
     if args.process in ["classes", "all"]:
+        logger.info("--- 授業処理を開始 ---")
         success &= process_classes(
             output_dir=output_dir,
             api_key=api_key,
@@ -329,14 +396,16 @@ def main():
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
         )
+        logger.info("--- 授業処理を完了 ---")
     
     # サーバー更新
     if args.update_server and success:
         if not github_token:
-            print("警告: GitHubトークンが設定されていないため、サーバー更新をスキップします。")
+            logger.warning("GitHubトークンが設定されていないため、サーバー更新をスキップします。")
         elif not args.server_repo_url:
-            print("警告: サーバーリポジトリURLが設定されていないため、サーバー更新をスキップします。")
+            logger.warning("サーバーリポジトリURLが設定されていないため、サーバー更新をスキップします。")
         else:
+            logger.info("--- サーバー更新を開始 ---")
             server_repo_path = args.server_repo_path or output_dir / "server_repo"
             update_server(
                 output_dir=output_dir,
@@ -345,6 +414,14 @@ def main():
                 repo_url=args.server_repo_url,
                 branch=args.branch,
             )
+            logger.info("--- サーバー更新を完了 ---")
+    
+    logger.info("=" * 60)
+    if success:
+        logger.info("すべての処理が正常に完了しました")
+    else:
+        logger.error("一部の処理でエラーが発生しました")
+    logger.info("=" * 60)
     
     sys.exit(0 if success else 1)
 

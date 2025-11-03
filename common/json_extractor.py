@@ -7,7 +7,10 @@ APIレスポンスからJSONを抽出する共通処理
 
 import json
 import re
+import logging
 from typing import Any, Optional, Union, Dict, List
+
+logger = logging.getLogger(__name__)
 
 
 JsonType = Union[Dict[str, Any], List[Any], str, int, float, bool, None]
@@ -25,14 +28,19 @@ def extract_json_from_text(text: str) -> Optional[Any]:
     1) ```json ... ``` の中身
     2) それがなければ最初の { ... } をナイーブに
     """
+    logger.debug(f"JSON抽出を開始: テキスト長={len(text)}文字")
     m = JSON_BLOCK_RE.search(text)
     if not m:
+        logger.warning("JSONブロックが見つかりませんでした")
         return None
     blob = m.group("json1") or m.group("json2")
     # 余計なトレーリングカンマなどに優しく:
     try:
-        return json.loads(blob)
-    except json.JSONDecodeError:
+        result = json.loads(blob)
+        logger.debug("JSON抽出成功")
+        return result
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSONパースエラー、修復を試行中: {e}")
         # よくある壊れ: True/False/None を JSONに寄せる
         fixed = (
             blob.replace("'", '"')
@@ -41,25 +49,36 @@ def extract_json_from_text(text: str) -> Optional[Any]:
                 .replace(" None", " null")
         )
         try:
-            return json.loads(fixed)
-        except Exception:
+            result = json.loads(fixed)
+            logger.debug("JSON修復成功")
+            return result
+        except Exception as e2:
+            logger.error(f"JSON修復失敗: {e2}")
             return None
 
 
 def try_json_loads(text: str) -> JsonType:
     """厳密JSONパース。失敗時はJSONらしき部分を抽出して再トライ。"""
+    logger.debug(f"JSONパースを開始: テキスト長={len(text)}文字")
     try:
-        return json.loads(text)
-    except Exception:
-        pass
+        result = json.loads(text)
+        logger.debug("JSONパース成功")
+        return result
+    except Exception as e:
+        logger.debug(f"JSONパース失敗、抽出を試行中: {e}")
 
     # 最後の { ... } または [ ... ] を強引に抽出
     obj_match = re.findall(r"(\{[\s\S]*\}|\[[\s\S]*\])", text)
+    logger.debug(f"JSONらしきブロックを{len(obj_match)}件発見")
     for s in reversed(obj_match):
         try:
-            return json.loads(s)
-        except Exception:
+            result = json.loads(s)
+            logger.debug("JSON抽出・パース成功")
+            return result
+        except Exception as e:
+            logger.debug(f"抽出ブロックのパース失敗: {e}")
             continue
+    logger.error(f"JSONの抽出/パースに失敗しました。応答:\n{text[:1000]}")
     raise ValueError("JSONの抽出/パースに失敗しました。応答:\n" + text[:1000])
 
 

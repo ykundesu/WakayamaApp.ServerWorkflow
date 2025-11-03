@@ -7,6 +7,7 @@
 
 import os
 import json
+import logging
 import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +16,8 @@ from collections import defaultdict
 
 from common.pdf_processor import PDFProcessor
 from common.image_utils import render_pdf_pages
+
+logger = logging.getLogger(__name__)
 
 
 MEALS_PROMPT = """献立の画像を添付してあります。以下のスキーマの形で画像に含まれている一週間の献立を抜き出してください。
@@ -191,6 +194,8 @@ def process_meals_pdf(
     Returns:
         処理成功したかどうか
     """
+    logger.info(f"寮食PDF処理を開始: {pdf_path}")
+    logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, out_dir={out_dir}")
     try:
         # 出力ディレクトリ作成
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -198,8 +203,10 @@ def process_meals_pdf(
         json_dir.mkdir(parents=True, exist_ok=True)
         meals_dir = out_dir / "meals"
         meals_dir.mkdir(parents=True, exist_ok=True)
+        logger.debug(f"出力ディレクトリを作成: json_dir={json_dir}, meals_dir={meals_dir}")
         
         # PDFProcessor初期化
+        logger.info("PDFProcessorを初期化中...")
         processor = PDFProcessor(
             model=model,
             api_key=api_key,
@@ -214,19 +221,24 @@ def process_meals_pdf(
         
         # プロンプトテキストを決定（ファイルから読み込むか、デフォルトを使用）
         if prompt_file and prompt_file.exists():
+            logger.info(f"プロンプトファイルを読み込み中: {prompt_file}")
             prompt_text = prompt_file.read_text(encoding="utf-8")
+            logger.debug(f"プロンプト長: {len(prompt_text)}文字")
         else:
+            logger.debug("デフォルトプロンプトを使用")
             prompt_text = MEALS_PROMPT
         
         # PDFをレンダリング
+        logger.info("PDFをレンダリング中...")
         pages = render_pdf_pages(pdf_path, dpi=dpi)
-        print(f"{len(pages)} ページをレンダリングしました。")
+        logger.info(f"{len(pages)} ページをレンダリングしました。")
         
         # 各ページを処理
         all_menus = []
+        logger.info(f"各ページの処理を開始: 総ページ数={len(pages)}")
         for idx, im in enumerate(pages, start=1):
             label = f"page_{idx:04d}"
-            print(f"Processing: {label} ...")
+            logger.info(f"Processing: {label} ({idx}/{len(pages)})...")
             
             try:
                 result_json = processor.process_page(
@@ -245,22 +257,28 @@ def process_meals_pdf(
                     menus_data = result_json
                 
                 if isinstance(menus_data, dict) and "menus" in menus_data:
+                    menu_count = len(menus_data["menus"])
                     all_menus.extend(menus_data["menus"])
+                    logger.debug(f"ページ {idx} から {menu_count}件のメニューを抽出")
                 
                 # JSON保存
                 page_json_path = json_dir / f"{label}.json"
                 with open(page_json_path, "w", encoding="utf-8") as f:
                     json.dump(result_json, f, ensure_ascii=False, indent=2)
-                print("  -> JSON保存OK")
+                logger.debug(f"JSON保存OK: {page_json_path}")
                 
             except Exception as e:
-                print(f"  -> ERROR: {e}")
+                logger.error(f"  -> ERROR: {e}", exc_info=True)
                 continue
+        
+        logger.info(f"全ページ処理完了: 合計{len(all_menus)}件のメニューを抽出")
         
         # 週ごとに分割
         if all_menus:
+            logger.info("メニューを週ごとにグループ化中...")
             converted = convert_daily_to_all({"menus": all_menus}, base_year=datetime.now().year)
             weekly_menus = group_by_week(converted["allMenus"])
+            logger.info(f"週ごとのグループ化完了: {len(weekly_menus)}週分")
             
             # 週ごとのメニューを保存
             for monday_date, menus in weekly_menus.items():
@@ -275,9 +293,10 @@ def process_meals_pdf(
                 with open(filepath, 'w', encoding='utf-8') as f:
                     json.dump(week_data, f, ensure_ascii=False, separators=(',', ':'))
                 
-                print(f"保存しました: {filepath} ({len(menus)}件のメニュー)")
+                logger.info(f"保存しました: {filepath} ({len(menus)}件のメニュー)")
         
+        logger.info("寮食PDF処理が完了しました")
         return True
     except Exception as e:
-        print(f"寮食PDF処理エラー: {e}")
+        logger.exception(f"寮食PDF処理エラー: {e}")
         return False

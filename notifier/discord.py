@@ -7,9 +7,12 @@ Discord Webhook通知
 
 import os
 import json
+import logging
 import requests
 from typing import Optional, Dict, Any, List
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def send_discord_notification(
@@ -34,6 +37,8 @@ def send_discord_notification(
     Returns:
         送信成功したかどうか
     """
+    logger.info(f"Discord通知を送信中: title={title}")
+    logger.debug(f"webhook_url={webhook_url[:30]}..., color={hex(color)}")
     try:
         embed = {
             "title": title,
@@ -44,6 +49,7 @@ def send_discord_notification(
         
         if fields:
             embed["fields"] = fields
+            logger.debug(f"フィールド数: {len(fields)}")
         
         if footer:
             embed["footer"] = {"text": footer}
@@ -52,11 +58,13 @@ def send_discord_notification(
             "embeds": [embed]
         }
         
+        logger.debug("HTTPリクエスト送信中...")
         response = requests.post(webhook_url, json=payload, timeout=10)
         response.raise_for_status()
+        logger.info("Discord通知の送信が完了しました")
         return True
     except Exception as e:
-        print(f"Discord通知エラー: {e}")
+        logger.error(f"Discord通知エラー: {e}", exc_info=True)
         return False
 
 

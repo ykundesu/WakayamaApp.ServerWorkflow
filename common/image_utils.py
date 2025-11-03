@@ -6,11 +6,14 @@ PDFレンダリング、画像分割などの共通処理
 """
 
 import io
+import logging
 from typing import List, Tuple
 from pathlib import Path
 
 import fitz  # PyMuPDF
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 
 def render_pdf_pages(pdf_path: str, dpi: int = 200) -> List[Image.Image]:
@@ -18,15 +21,24 @@ def render_pdf_pages(pdf_path: str, dpi: int = 200) -> List[Image.Image]:
     PDFを各ページPNG (Pillow) にレンダリング。
     dpiが高いほど解像度↑だが処理重くなる。200〜300くらいが現実的。
     """
+    logger.info(f"PDFをレンダリング中: {pdf_path}, dpi={dpi}")
     pages = []
-    with fitz.open(pdf_path) as doc:
-        zoom = dpi / 72.0
-        mat = fitz.Matrix(zoom, zoom)
-        for pno in range(len(doc)):
-            pix = doc[pno].get_pixmap(matrix=mat, alpha=False)
-            im = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            pages.append(im)
-    return pages
+    try:
+        with fitz.open(pdf_path) as doc:
+            page_count = len(doc)
+            logger.info(f"PDFページ数: {page_count}")
+            zoom = dpi / 72.0
+            mat = fitz.Matrix(zoom, zoom)
+            for pno in range(len(doc)):
+                logger.debug(f"ページ {pno + 1}/{page_count} をレンダリング中...")
+                pix = doc[pno].get_pixmap(matrix=mat, alpha=False)
+                im = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                pages.append(im)
+        logger.info(f"PDFレンダリング完了: {len(pages)}ページ")
+        return pages
+    except Exception as e:
+        logger.error(f"PDFレンダリングエラー: {e}", exc_info=True)
+        raise
 
 
 def render_page_to_pil(page: "fitz.Page", dpi: int = 288) -> Image.Image:

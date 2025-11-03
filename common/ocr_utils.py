@@ -5,9 +5,12 @@ Yomitoku OCRユーティリティ
 OCR処理の共通化
 """
 
+import logging
 from typing import Optional, Dict, Any
 from pathlib import Path
 from PIL import Image
+
+logger = logging.getLogger(__name__)
 
 # Yomitoku（任意機能）のための遅延インポート用フラグ
 _yomitoku_available = False
@@ -37,16 +40,23 @@ class YomitokuOCR:
     """
 
     def __init__(self, device: str = "cpu", config: Optional[Dict[str, Any]] = None):
+        logger.info(f"YomitokuOCRを初期化中: device={device}")
         if not _yomitoku_available or not _cv2_available or not _np_available:
-            raise RuntimeError(
-                "Yomitoku OCR を使用するには 'yomitoku', 'opencv-python', 'numpy' のインストールが必要です。"
-            )
+            error_msg = "Yomitoku OCR を使用するには 'yomitoku', 'opencv-python', 'numpy' のインストールが必要です。"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
         from yomitoku import DocumentAnalyzer  # 遅延 import
         self.DocumentAnalyzer = DocumentAnalyzer
         self.device = device
         self.config = config or {}
+        logger.debug(f"Yomitoku設定: {self.config}")
         # 可視化は不要、設定を注入
-        self.analyzer = self.DocumentAnalyzer(visualize=False, device=device, configs=self.config)
+        try:
+            self.analyzer = self.DocumentAnalyzer(visualize=False, device=device, configs=self.config)
+            logger.info(f"YomitokuOCRの初期化が完了しました: device={device}")
+        except Exception as e:
+            logger.error(f"YomitokuOCRの初期化に失敗しました: {e}", exc_info=True)
+            raise
 
     @staticmethod
     def pil_to_bgr(img: Image.Image) -> "np.ndarray":
@@ -64,11 +74,14 @@ class YomitokuOCR:
         戻り値:
           - 生成されたMarkdown文字列（空文字の可能性あり）
         """
+        logger.debug(f"OCR処理を開始: 画像サイズ={img.size}, 保存先={md_save_path}")
         bgr = self.pil_to_bgr(img)
         try:
+            logger.debug("DocumentAnalyzerを実行中...")
             results, _, _ = self.analyzer(bgr)
+            logger.debug("DocumentAnalyzerの実行が完了しました")
         except Exception as e:
-            print(f"[Yomitoku] 解析に失敗: {e}")
+            logger.error(f"[Yomitoku] 解析に失敗: {e}", exc_info=True)
             return ""
 
         md_text: Optional[str] = None
@@ -76,10 +89,12 @@ class YomitokuOCR:
         if md_save_path is not None:
             try:
                 md_save_path.parent.mkdir(parents=True, exist_ok=True)
+                logger.debug(f"Markdownを保存中: {md_save_path}")
                 results.to_markdown(str(md_save_path), img=bgr)
                 md_text = md_save_path.read_text(encoding="utf-8", errors="ignore")
+                logger.debug(f"Markdown保存完了: {len(md_text)}文字")
             except Exception as e:
-                print(f"[Yomitoku] Markdown保存/読込に失敗: {e}")
+                logger.warning(f"[Yomitoku] Markdown保存/読込に失敗: {e}")
 
         if not md_text:
             # 念のため保存せずに取得できる場合に備えたフォールバック（多くの実装では不可）
@@ -87,14 +102,18 @@ class YomitokuOCR:
                 tmp = Path(md_save_path or "page_tmp.md")
                 results.to_markdown(str(tmp), img=bgr)
                 md_text = tmp.read_text(encoding="utf-8", errors="ignore")
+                logger.debug(f"一時ファイルからMarkdownを取得: {len(md_text)}文字")
                 if not md_save_path:
                     # 一時ファイルは削除しておく
                     try:
                         tmp.unlink(missing_ok=True)
                     except Exception:
                         pass
-            except Exception:
+            except Exception as e:
+                logger.warning(f"[Yomitoku] 一時ファイルからの取得に失敗: {e}")
                 md_text = ""
 
-        return md_text or ""
+        result_text = md_text or ""
+        logger.info(f"OCR処理完了: {len(result_text)}文字のMarkdownを取得")
+        return result_text
 

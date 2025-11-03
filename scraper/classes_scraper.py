@@ -6,11 +6,14 @@
 """
 
 import re
+import logging
 import requests
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+
+logger = logging.getLogger(__name__)
 
 
 FULLWIDTH_DIGIT_TRANSLATION = str.maketrans({
@@ -199,16 +202,27 @@ def scrape_classes_page() -> Optional[str]:
     Returns:
         最新のPDFのURL、見つからない場合はNone
     """
+    logger.info(f"授業ページをスクレイピング中: {CLASSES_URL}")
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
+        logger.debug("HTTPリクエスト送信中...")
         response = requests.get(CLASSES_URL, headers=headers, timeout=30)
         response.raise_for_status()
+        logger.debug(f"レスポンス受信: ステータス={response.status_code}, サイズ={len(response.text)}文字")
         
-        return find_latest_pdf_url(response.text, CLASSES_URL)
+        logger.debug("PDFリンクを検索中...")
+        pdf_url = find_latest_pdf_url(response.text, CLASSES_URL)
+        
+        if pdf_url:
+            logger.info(f"最新のPDFリンクを発見: {pdf_url}")
+        else:
+            logger.warning("PDFリンクが見つかりませんでした")
+        
+        return pdf_url
     except Exception as e:
-        print(f"授業ページスクレイピングエラー: {e}")
+        logger.error(f"授業ページスクレイピングエラー: {e}", exc_info=True)
         return None
 
