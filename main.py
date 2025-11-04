@@ -48,11 +48,11 @@ def process_dormitory_meals(
     discord_webhook: Optional[str] = None,
     prompt_file: Optional[Path] = None,
     processed_hashes: Optional[Set[str]] = None,
-) -> tuple[bool, List[str]]:
+) -> tuple[bool, List[str], bool]:
     """寮食PDFの処理
     
     Returns:
-        (成功したかどうか, 処理済みPDFのハッシュリスト)
+        (エラーが無かったか, 処理済みPDFのハッシュリスト, 何かを処理したか)
     """
     logger.info("寮食PDF処理を開始します")
     logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
@@ -69,7 +69,7 @@ def process_dormitory_meals(
             logger.warning("寮食PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "meals", "PDFリンクが見つかりませんでした。")
-            return False, collected_hashes
+            return True, collected_hashes, False
         
         logger.info(f"PDFリンクを{len(pdf_infos)}件見つけました")
 
@@ -202,7 +202,7 @@ def process_dormitory_meals(
         
         logger.info(f"処理結果: 成功={len(processed)}, スキップ(既存)={len(skipped_existing)}, スキップ(未更新)={len(skipped_not_updated)}, スキップ(処理済み)={len(skipped_processed)}, エラー={'あり' if had_error else 'なし'}")
         
-        if processed:
+        if processed and not had_error:
             logger.info(f"{len(processed)}件のPDF処理が完了しました")
             if discord_webhook:
                 details = {
@@ -210,7 +210,11 @@ def process_dormitory_meals(
                     "出力ディレクトリ": "\n".join(p["out_dir"] for p in processed),
                 }
                 notify_success(discord_webhook, "meals", details)
-            return True, collected_hashes
+            return True, collected_hashes, True
+        
+        if processed and had_error:
+            # 一部成功・一部失敗
+            return False, collected_hashes, True
         
         if not had_error and discord_webhook:
             reasons = []
@@ -225,12 +229,12 @@ def process_dormitory_meals(
             notify_no_update(discord_webhook, "meals", "\n".join(reasons))
         
         logger.info("寮食PDF処理を完了しました（処理対象なし）")
-        return True, collected_hashes
+        return True, collected_hashes, False
     except Exception as e:
         logger.exception(f"寮食処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "meals", str(e))
-        return False, collected_hashes
+        return False, collected_hashes, False
 
 
 def process_classes(
@@ -241,11 +245,11 @@ def process_classes(
     use_yomitoku: bool = False,
     discord_webhook: Optional[str] = None,
     processed_hashes: Optional[Set[str]] = None,
-) -> tuple[bool, Optional[str]]:
+) -> tuple[bool, Optional[str], bool]:
     """授業PDFの処理
     
     Returns:
-        (成功したかどうか, 処理済みPDFのハッシュ)
+        (エラーが無かったか, 処理済みPDFのハッシュ, 何かを処理したか)
     """
     logger.info("授業PDF処理を開始します")
     logger.debug(f"パラメータ: model={model}, dpi={dpi}, use_yomitoku={use_yomitoku}, output_dir={output_dir}")
@@ -260,7 +264,7 @@ def process_classes(
             logger.warning("授業PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "classes", "PDFリンクが見つかりませんでした。")
-            return True, None
+            return True, None, False
         
         logger.info(f"PDF URL: {pdf_url}")
         
@@ -280,14 +284,14 @@ def process_classes(
                 logger.info("PDFが更新されていません。")
                 if discord_webhook:
                     notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                return True, None
+                return True, None, False
             
             logger.info("PDFをダウンロード中...")
             if not download_pdf(pdf_url, pdf_path):
                 logger.error("PDFのダウンロードに失敗しました。")
                 if discord_webhook:
                     notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
-                return False, None
+                return False, None, False
         else:
             # ハッシュを計算
             pdf_hash = get_file_hash(temp_path)
@@ -297,7 +301,7 @@ def process_classes(
                     if discord_webhook:
                         notify_no_update(discord_webhook, "classes", "PDFは既に処理済みです。")
                     temp_path.unlink(missing_ok=True)
-                    return True, None
+                    return True, None, False
                 
                 logger.info(f"PDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
                 # 一時ファイルを正式ファイルに移動
@@ -311,14 +315,14 @@ def process_classes(
                     logger.info("PDFが更新されていません。")
                     if discord_webhook:
                         notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                    return True, None
+                    return True, None, False
                 
                 logger.info("PDFをダウンロード中...")
                 if not download_pdf(pdf_url, pdf_path):
                     logger.error("PDFのダウンロードに失敗しました。")
                     if discord_webhook:
                         notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
-                    return False, None
+                    return False, None, False
         
         logger.info("PDFダウンロードが完了しました")
         
@@ -344,17 +348,17 @@ def process_classes(
                     "classes",
                     {"処理済みPDF": pdf_url, "出力ディレクトリ": str(classes_output_dir)},
                 )
-            return True, pdf_hash
+            return True, pdf_hash, True
         else:
             logger.error("授業PDF処理に失敗しました。")
             if discord_webhook:
                 notify_error(discord_webhook, "classes", "PDF処理に失敗しました。")
-            return False, None
+            return False, None, False
     except Exception as e:
         logger.exception(f"授業処理エラー: {e}")
         if discord_webhook:
             notify_error(discord_webhook, "classes", str(e))
-        return False, None
+        return False, None, False
 
 
 def update_server(
@@ -522,14 +526,15 @@ def main():
         else:
             logger.debug("server_repoの情報が不足しているため、ハッシュチェックをスキップします。")
     
-    success = True
+    # 集計フラグ
+    had_any_error = False
     meals_collected_hashes: List[str] = []
     classes_collected_hash: Optional[str] = None
     
     # 処理実行
     if args.process in ["meals", "all"]:
         logger.info("--- 寮食処理を開始 ---")
-        meals_success, collected = process_dormitory_meals(
+        meals_ok, collected, meals_did_process = process_dormitory_meals(
             output_dir=output_dir,
             api_key=api_key,
             model=args.model,
@@ -539,13 +544,13 @@ def main():
             prompt_file=args.prompt_file,
             processed_hashes=meals_processed_hashes,
         )
-        success &= meals_success
+        had_any_error |= (not meals_ok)
         meals_collected_hashes = collected
         logger.info("--- 寮食処理を完了 ---")
     
     if args.process in ["classes", "all"]:
         logger.info("--- 授業処理を開始 ---")
-        classes_success, collected_hash = process_classes(
+        classes_ok, collected_hash, classes_did_process = process_classes(
             output_dir=output_dir,
             api_key=api_key,
             model=args.model,
@@ -554,7 +559,7 @@ def main():
             discord_webhook=discord_webhook,
             processed_hashes=classes_processed_hashes,
         )
-        success &= classes_success
+        had_any_error |= (not classes_ok)
         classes_collected_hash = collected_hash
         logger.info("--- 授業処理を完了 ---")
     
@@ -578,7 +583,7 @@ def main():
             logger.warning(f"授業の処理済みハッシュの保存に失敗しました: {e}")
     
     # サーバー更新
-    if args.update_server and success:
+    if args.update_server and not had_any_error:
         if not github_token:
             logger.warning("GitHubトークンが設定されていないため、サーバー更新をスキップします。")
         elif not args.server_repo_url:
@@ -595,6 +600,7 @@ def main():
             logger.info("--- サーバー更新を完了 ---")
     
     logger.info("=" * 60)
+    success = not had_any_error
     if success:
         logger.info("すべての処理が正常に完了しました")
     else:
