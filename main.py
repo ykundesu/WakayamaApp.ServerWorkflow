@@ -225,7 +225,7 @@ def process_dormitory_meals(
             notify_no_update(discord_webhook, "meals", "\n".join(reasons))
         
         logger.info("寮食PDF処理を完了しました（処理対象なし）")
-        return False, collected_hashes
+        return True, collected_hashes
     except Exception as e:
         logger.exception(f"寮食処理エラー: {e}")
         if discord_webhook:
@@ -260,7 +260,7 @@ def process_classes(
             logger.warning("授業PDFリンクが見つかりませんでした。")
             if discord_webhook:
                 notify_no_update(discord_webhook, "classes", "PDFリンクが見つかりませんでした。")
-            return False, None
+            return True, None
         
         logger.info(f"PDF URL: {pdf_url}")
         
@@ -280,7 +280,7 @@ def process_classes(
                 logger.info("PDFが更新されていません。")
                 if discord_webhook:
                     notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                return False, None
+                return True, None
             
             logger.info("PDFをダウンロード中...")
             if not download_pdf(pdf_url, pdf_path):
@@ -297,7 +297,7 @@ def process_classes(
                     if discord_webhook:
                         notify_no_update(discord_webhook, "classes", "PDFは既に処理済みです。")
                     temp_path.unlink(missing_ok=True)
-                    return False, None
+                    return True, None
                 
                 logger.info(f"PDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
                 # 一時ファイルを正式ファイルに移動
@@ -311,7 +311,7 @@ def process_classes(
                     logger.info("PDFが更新されていません。")
                     if discord_webhook:
                         notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                    return False, None
+                    return True, None
                 
                 logger.info("PDFをダウンロード中...")
                 if not download_pdf(pdf_url, pdf_path):
