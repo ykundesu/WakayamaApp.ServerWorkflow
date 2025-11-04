@@ -1,6 +1,6 @@
-# ServerProcesser自動化ワークフロー
+# WakayamaApp自動化ワークフロー
 
-このディレクトリには、ServerProcesserをGitHub Actions上で自動実行するためのワークフローが含まれています。
+このレポジトリでは、自動で寮食・授業情報を取得するプログラム、それをGitHub Actions上で自動実行するためのワークフローが含まれています。
 
 ## 概要
 
@@ -63,6 +63,6 @@ GitHub Secretsに以下を設定してください:
 
 - `GOOGLE_API_KEY`: Google Gemini APIキー
 - `DISCORD_WEBHOOK_URL`: Discord Webhook URL
-- `GITHUBACCOUNT_TOKEN`: GitHubトークン（WakayamaServer更新用）
+- `GITHUBACCOUNT_TOKEN`: GitHubトークン（情報リポジトリの更新用）
 - `SERVER_REPO_URL`: WakayamaServerリポジトリURL（例: https://github.com/user/WakayamaServer.git）
 
