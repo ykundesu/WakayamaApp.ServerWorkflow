@@ -8,14 +8,14 @@
 import os
 import json
 import logging
-import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from collections import defaultdict
 
 from common.pdf_processor import PDFProcessor
 from common.image_utils import render_pdf_pages
+from common.menu_converter import convert_daily_to_all
 
 logger = logging.getLogger(__name__)
 
@@ -104,15 +104,6 @@ MEALS_PROMPT = """献立の画像を添付してあります。以下のスキ�
 提供されている全ての日時のbreakfast, lunch, dinnerのデータを抽出してください。"""
 
 
-def _to_iso_date(mmdd: str, base_year: Optional[int] = None) -> str:
-    """'MM/DD' を 'YYYY-MM-DD' に変換。年は base_year（未指定なら今年）。"""
-    if base_year is None:
-        base_year = datetime.now().year
-    month_str, day_str = mmdd.split("/")
-    dt = date(base_year, int(month_str), int(day_str))
-    return dt.strftime("%Y-%m-%d")
-
-
 def get_monday_date(date_str: str) -> str:
     """与えられた日付の週の月曜日を取得する"""
     date = datetime.strptime(date_str, '%Y-%m-%d')
@@ -132,35 +123,6 @@ def group_by_week(menus: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]
     return weekly_menus
 
 
-def convert_daily_to_all(src: Dict[str, Any], base_year: Optional[int] = None) -> Dict[str, Any]:
-    """旧『Daily Menus』形式の dict を、新『All Menus』形式の dict に変換。"""
-    if type(src) == list:
-        result = {"menus": []}
-        for item in src:
-            for day in item["menus"]:
-                result["menus"].append(day)
-        src = result
-    
-    menus = src.get("menus")
-    if not isinstance(menus, list):
-        raise ValueError("src['menus'] は配列である必要があるよ。")
-    
-    out_days: List[Dict[str, Any]] = []
-    for day in menus:
-        if not isinstance(day, dict):
-            continue
-        mmdd = day.get("day")
-        if not isinstance(mmdd, str):
-            raise ValueError("各メニューの 'day' は 'MM/DD' 文字列である必要があるよ。")
-        
-        out_days.append({
-            "date": _to_iso_date(mmdd, base_year),
-            "breakfast": day.get("breakfast") or [],
-            "lunch": day.get("lunch") or [],
-            "dinner": day.get("dinner") or [],
-        })
-    
-    return {"allMenus": out_days}
 
 
 def process_meals_pdf(
@@ -276,7 +238,12 @@ def process_meals_pdf(
         # 週ごとに分割
         if all_menus:
             logger.info("メニューを週ごとにグループ化中...")
-            converted = convert_daily_to_all({"menus": all_menus}, base_year=datetime.now().year)
+            # 旧形式から新形式に変換
+            converted = convert_daily_to_all(
+                {"menus": all_menus},
+                base_year=datetime.now().year,
+                convert_to_new_format=True,
+            )
             weekly_menus = group_by_week(converted["allMenus"])
             logger.info(f"週ごとのグループ化完了: {len(weekly_menus)}週分")
             
