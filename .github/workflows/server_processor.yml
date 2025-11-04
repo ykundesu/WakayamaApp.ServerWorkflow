@@ -1,10 +1,10 @@
 name: Server Processor Workflow
 
 on:
-  # cron設定（ユーザーが指定）
-  # 例: 毎日午前2時（JST）に実行
-  # schedule:
-  #   - cron: '0 17 * * *'  # UTC 17:00 = JST 02:00
+  # cron設定
+  # 毎日午前2時（JST）に実行
+  schedule:
+    - cron: '0 17 * * *'  # UTC 17:00 = JST 02:00
   workflow_dispatch:  # 手動実行も可能
 
 jobs:
