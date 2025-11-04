@@ -59,17 +59,28 @@ def _safe_year_month(year: int, month: int) -> Optional[str]:
     return None
 
 
-def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, Any]]:
+def extract_pdf_links(html: str, base_url: str) -> List[Dict[str, Any]]:        
     """
     Collect candidate PDF links from the dormitory menu page.
+    
+    Only searches within the element with class="pagebody" to exclude
+    header and footer links.
 
-    Returns a list containing the resolved URL and any detected date metadata.
+    Returns a list containing the resolved URL and any detected date metadata.  
     """
     soup = BeautifulSoup(html, "html.parser")
     pdf_links: List[Dict[str, Any]] = []
     seen_urls: set[str] = set()
 
-    for link in soup.find_all("a", href=True):
+    # class="pagebody"の中のみを対象にする
+    pagebody = soup.find(class_="pagebody")
+    if not pagebody:
+        logger.warning("class='pagebody'が見つかりませんでした。ページ全体を検索します。")
+        search_root = soup
+    else:
+        search_root = pagebody
+
+    for link in search_root.find_all("a", href=True):
         href = link.get("href", "")
         if not href or ".pdf" not in href.lower():
             continue
