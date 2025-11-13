@@ -100,7 +100,7 @@ class GeminiCaller:
         self.gen_config = types.GenerateContentConfig(**cfg_kwargs)
         logger.info("GeminiCallerの初期化が完了しました")
 
-    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=30),
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=4, min=1, max=120),
            retry=retry_if_exception(is_503_error))
     def generate(self, prompt: str, images: List[Image.Image]) -> JsonType:
         logger.info(f"Gemini API呼び出し中: model={self.model_name}, 画像数={len(images)}")
