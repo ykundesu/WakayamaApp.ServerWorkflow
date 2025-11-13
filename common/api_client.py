@@ -32,7 +32,31 @@ try:
 except ImportError:
     _requests_available = False
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
+
+
+def is_503_error(exception: Exception) -> bool:
+    """503エラーを検出する関数"""
+    error_str = str(exception)
+    # エラーメッセージに "503" または "UNAVAILABLE" が含まれているか確認
+    if "503" in error_str or "UNAVAILABLE" in error_str:
+        return True
+    # requests の HTTPError の場合
+    if _requests_available:
+        import requests
+        if isinstance(exception, requests.HTTPError):
+            if hasattr(exception, "response") and exception.response is not None:
+                if exception.response.status_code == 503:
+                    return True
+    # エラーオブジェクトに error 属性がある場合（google-genai のエラー形式）
+    if hasattr(exception, "error"):
+        error_obj = getattr(exception, "error", {})
+        if isinstance(error_obj, dict):
+            code = error_obj.get("code")
+            status = error_obj.get("status")
+            if code == 503 or status == "UNAVAILABLE":
+                return True
+    return False
 
 
 def pil_to_png_bytes(im: Image.Image) -> bytes:
@@ -76,8 +100,8 @@ class GeminiCaller:
         self.gen_config = types.GenerateContentConfig(**cfg_kwargs)
         logger.info("GeminiCallerの初期化が完了しました")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10),
-           retry=retry_if_exception_type(Exception))
+    @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=30),
+           retry=retry_if_exception(is_503_error))
     def generate(self, prompt: str, images: List[Image.Image]) -> JsonType:
         logger.info(f"Gemini API呼び出し中: model={self.model_name}, 画像数={len(images)}")
         logger.debug(f"プロンプト長: {len(prompt)}文字")
@@ -104,7 +128,10 @@ class GeminiCaller:
             logger.info("Gemini API呼び出しが成功しました")
             return result
         except Exception as e:
-            logger.error(f"Gemini API呼び出しエラー: {e}", exc_info=True)
+            if is_503_error(e):
+                logger.warning(f"Gemini API呼び出しエラー (503): {e}. リトライします...")
+            else:
+                logger.error(f"Gemini API呼び出しエラー: {e}", exc_info=True)
             raise
 
 
@@ -181,6 +208,8 @@ class OpenRouterCaller:
             raise
 
 
+@retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=30),
+       retry=retry_if_exception(is_503_error))
 def call_gemini_multimodal(
     api_key: str,
     model: str,
@@ -253,6 +282,9 @@ def call_gemini_multimodal(
         logger.info("Gemini Multimodal API呼び出しが成功しました")
         return result
     except Exception as e:
-        logger.error(f"Gemini Multimodal API呼び出しエラー: {e}", exc_info=True)
+        if is_503_error(e):
+            logger.warning(f"Gemini Multimodal API呼び出しエラー (503): {e}. リトライします...")
+        else:
+            logger.error(f"Gemini Multimodal API呼び出しエラー: {e}", exc_info=True)
         raise
 
