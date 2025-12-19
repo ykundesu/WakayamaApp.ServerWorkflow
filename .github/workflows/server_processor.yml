@@ -34,7 +34,7 @@ jobs:
           python -X utf8 main.py \
             --process all \
             --output-dir ./output \
-            --model gemini-2.5-flash \
+            --model gemini-3.0-flash \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \
