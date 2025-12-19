@@ -113,7 +113,7 @@ class GeminiCaller:
                 contents=parts,
                 config=types.GenerateContentConfig(
                     temperature=self.temperature,
-                    thinking_config=types.ThinkingConfig(thinking_budget=24756),
+                    thinking_config=types.ThinkingConfig(thinking_budget=24576),
                     response_mime_type=self.gen_config.response_mime_type if getattr(self.gen_config, "response_mime_type", None) else None,
                     response_schema=self.gen_config.response_schema if getattr(self.gen_config, "response_schema", None) else None,
                 ),
