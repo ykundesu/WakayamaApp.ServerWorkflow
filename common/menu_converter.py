@@ -135,7 +135,15 @@ def convert_daily_to_all(
 
         # MM/DD を YYYY-MM-DD に変換
         if base_year is None:
-            base_year = _dt.date.today().year
+            today = _dt.date.today()
+            current_month = today.month
+            data_month = int(mmdd.split("/")[0])
+
+            # 11月または12月に1月～2月のデータを処理する場合、次の年を使用
+            if (current_month in [11, 12]) and (data_month in [1, 2]):
+                base_year = today.year + 1
+            else:
+                base_year = today.year
         month_str, day_str = mmdd.split("/")
         dt = _dt.date(base_year, int(month_str), int(day_str))
         date_str = dt.strftime("%Y-%m-%d")
