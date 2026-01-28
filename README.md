@@ -1,11 +1,11 @@
 # WakayamaApp自動化ワークフロー
 
-このレポジトリでは、自動で寮食・授業情報を取得するプログラム、それをGitHub Actions上で自動実行するためのワークフローが含まれています。
+このレポジトリでは、自動で寮食・授業・学校規則情報を取得するプログラム、それをGitHub Actions上で自動実行するためのワークフローが含まれています。
 
 ## 概要
 
-- 寮食ページと授業ページから最新のPDFをスクレイピング
-- PDFを処理してJSONデータを生成
+- 寮食ページ・授業ページ・学校規則ページから最新のPDFをスクレイピング
+- PDFや規則文書を処理してJSONデータを生成
 - WakayamaServerリポジトリを更新
 - Discord Webhookで処理結果を通知
 
@@ -48,6 +48,9 @@ python main.py --process meals
 
 # 授業のみ処理
 python main.py --process classes
+
+# 学校規則のみ処理
+python main.py --process rules
 
 # サーバー更新も含める
 python main.py --process all --update-server --server-repo-url https://github.com/user/repo.git
