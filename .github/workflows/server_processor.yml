@@ -27,6 +27,7 @@ jobs:
       - name: Process PDFs
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
@@ -35,6 +36,8 @@ jobs:
             --process all \
             --output-dir ./output \
             --model gemini-3-flash-preview \
+            --rules-provider openrouter \
+            --rules-model openai/gpt-oss-120b:free \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \

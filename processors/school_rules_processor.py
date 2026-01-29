@@ -234,23 +234,31 @@ def compose_rule_detail(
 
 
 class RulesTextCaller:
-    def __init__(self, model: str, api_key: str, temperature: float = 0.2, max_tokens: int = 4096):
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        gemini_api_key: Optional[str] = None,
+        openrouter_api_key: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 4096,
+    ):
+        self.provider = provider
         self.model = model
-        self.api_key = api_key
+        self.gemini_api_key = gemini_api_key
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.use_openrouter = "/" in model
         self._openrouter: Optional[OpenRouterCaller] = None
-        if self.use_openrouter:
+        if provider == "openrouter":
             self._openrouter = OpenRouterCaller(
                 model=model,
-                api_key=api_key,
+                api_key=openrouter_api_key,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
 
     def call(self, prompt: str) -> str:
-        if self.use_openrouter:
+        if self.provider == "openrouter":
             assert self._openrouter is not None
             response = self._openrouter.call_multimodal(prompt, {})
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -265,7 +273,7 @@ class RulesTextCaller:
             return str(content or "")
 
         response = call_gemini_multimodal(
-            api_key=self.api_key,
+            api_key=self.gemini_api_key or "",
             model=self.model,
             prompt_text=prompt,
             images={},
@@ -531,18 +539,28 @@ def request_minimal_payload(
 
 def process_school_rules(
     output_dir: Path,
-    api_key: str,
+    api_key: Optional[str],
     model: str = "gemini-2.5-pro",
     dpi: int = 220,
     use_yomitoku: bool = False,
     rules_url: str = RULES_URL,
     processed_hashes: Optional[Set[str]] = None,
     server_repo_path: Optional[Path] = None,
+    provider: str = "gemini",
+    openrouter_api_key: Optional[str] = None,
 ) -> Tuple[bool, List[str], bool]:
     """Process school rules PDFs that have been updated."""
     logger.info("School rules processing started")
     if processed_hashes is None:
         processed_hashes = set()
+
+    if provider == "gemini" and not api_key:
+        logger.error("Gemini APIキーが指定されていません。")
+        return False, [], False
+
+    if provider == "openrouter" and not openrouter_api_key:
+        logger.error("OpenRouter APIキーが指定されていません。")
+        return False, [], False
 
     if not use_yomitoku:
         logger.error("School rules processing requires Yomitoku OCR (--use-yomitoku).")
@@ -575,7 +593,14 @@ def process_school_rules(
 
     removed_rule_ids = sorted(set(existing_rules_by_id.keys()) - all_rule_ids)
 
-    caller = RulesTextCaller(model=model, api_key=api_key, temperature=0.2, max_tokens=4096)
+    caller = RulesTextCaller(
+        provider=provider,
+        model=model,
+        gemini_api_key=api_key,
+        openrouter_api_key=openrouter_api_key,
+        temperature=0.2,
+        max_tokens=4096,
+    )
     ocr = YomitokuOCR(device="cpu")
     generated_at = datetime.now(timezone.utc)
     version = generated_at.strftime("%Y%m%dT%H%M%SZ")
@@ -721,6 +746,8 @@ def process_school_rules(
         "regeneratedRuleIds": regenerated_rule_ids,
         "removedRuleIds": removed_rule_ids,
         "rulesUrl": rules_url,
+        "provider": provider,
+        "model": model,
     }
     (rules_output / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),

@@ -689,6 +689,14 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
     parser.add_argument("--api-key", type=str, default=None, help="APIキー（未指定なら環境変数 GOOGLE_API_KEY を使用）")
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="使用するモデル")
+    parser.add_argument("--rules-model", type=str, default=None, help="学校規則処理用モデル（未指定なら --model を使用）")
+    parser.add_argument(
+        "--rules-provider",
+        choices=["gemini", "openrouter"],
+        default="gemini",
+        help="学校規則の抽出プロバイダ",
+    )
+    parser.add_argument("--openrouter-api-key", type=str, default=None, help="OpenRouter APIキー（未指定なら環境変数 OPENROUTER_API_KEY を使用）")
     parser.add_argument("--dpi", type=int, default=220, help="レンダリングDPI")
     parser.add_argument("--use-yomitoku", action="store_true", help="Yomitoku OCRを使用")
     parser.add_argument("--prompt-file", type=Path, default=None, help="プロンプトファイルパス（寮食処理用）")
@@ -703,6 +711,8 @@ def main():
     
     logger.info(f"処理タイプ: {args.process}")
     logger.info(f"使用モデル: {args.model}")
+    logger.info(f"規則モデル: {args.rules_model or args.model}")
+    logger.info(f"規則プロバイダ: {args.rules_provider}")
     logger.info(f"DPI: {args.dpi}")
     logger.info(f"Yomitoku OCR: {'有効' if args.use_yomitoku else '無効'}")
     logger.info(f"出力ディレクトリ: {args.output_dir}")
@@ -710,16 +720,32 @@ def main():
     
     # 環境変数から取得
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
+    openrouter_api_key = args.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
     discord_webhook = args.discord_webhook or os.getenv("DISCORD_WEBHOOK_URL")
     github_token = args.github_token or os.getenv("GITHUB_TOKEN")
     
-    logger.debug(f"環境変数取得状況: API_KEY={'設定済み' if api_key else '未設定'}, "
-                 f"DISCORD_WEBHOOK={'設定済み' if discord_webhook else '未設定'}, "
-                 f"GITHUB_TOKEN={'設定済み' if github_token else '未設定'}")
-    
-    if not api_key:
-        logger.error("APIキーが設定されていません。")
+    logger.debug(
+        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
+        "設定済み" if api_key else "未設定",
+        "設定済み" if openrouter_api_key else "未設定",
+        "設定済み" if discord_webhook else "未設定",
+        "設定済み" if github_token else "未設定",
+    )
+
+    needs_gemini_key = args.process in ["meals", "classes", "dormitory_events", "all"]
+    if args.process in ["rules", "all"] and args.rules_provider == "gemini":
+        needs_gemini_key = True
+
+    if needs_gemini_key and not api_key:
+        logger.error("Google APIキーが設定されていません。")
         sys.exit(1)
+
+    if args.process in ["rules", "all"] and args.rules_provider == "openrouter" and not openrouter_api_key:
+        logger.error("OpenRouter APIキーが設定されていません。")
+        sys.exit(1)
+
+    google_api_key = api_key or ""
+    rules_model = args.rules_model or args.model
     
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -768,7 +794,7 @@ def main():
         logger.info("--- 寮食処理を開始 ---")
         meals_ok, collected, meals_did_process = process_dormitory_meals(
             output_dir=output_dir,
-            api_key=api_key,
+            api_key=google_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
@@ -784,7 +810,7 @@ def main():
         logger.info("--- 寮行事処理を開始 ---")
         events_ok, events_state, events_did_process = process_dormitory_events(
             output_dir=output_dir,
-            api_key=api_key,
+            api_key=google_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
@@ -799,7 +825,7 @@ def main():
         logger.info("--- 授業処理を開始 ---")
         classes_ok, collected_hash, classes_did_process = process_classes(
             output_dir=output_dir,
-            api_key=api_key,
+            api_key=google_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
@@ -814,12 +840,14 @@ def main():
         logger.info("--- 規則処理を開始 ---")
         rules_ok, collected_hashes, rules_did_process = process_school_rules(
             output_dir=output_dir,
-            api_key=api_key,
-            model=args.model,
+            api_key=google_api_key if args.rules_provider == "gemini" else None,
+            model=rules_model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             processed_hashes=rules_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
+            provider=args.rules_provider,
+            openrouter_api_key=openrouter_api_key,
         )
         had_any_error |= (not rules_ok)
         rules_collected_hashes = collected_hashes
