@@ -37,22 +37,22 @@ DATE_RANGE_JP_RE = re.compile(
 
 
 EVENTS_SCHEMA = {
-    "type": "object",
+    "type": "OBJECT",
     "additionalProperties": False,
     "properties": {
-        "academic_year": {"type": "integer"},
+        "academic_year": {"type": "INTEGER"},
         "events": {
-            "type": "array",
+            "type": "ARRAY",
             "items": {
-                "type": "object",
+                "type": "OBJECT",
                 "additionalProperties": False,
                 "properties": {
                     "date": {
-                        "type": "string",
+                        "type": "STRING",
                         "pattern": "^(0?[1-9]|1[0-2])/(0?[1-9]|[12][0-9]|3[01])$",
                     },
-                    "grade": {"type": ["integer", "null"]},
-                    "name": {"type": "string"},
+                    "grade": {"type": "INTEGER", "nullable": True},
+                    "name": {"type": "STRING"},
                 },
                 "required": ["date", "grade", "name"],
             },
@@ -73,17 +73,17 @@ DORMITORY_EVENTS_PROMPT = """この画像は学生寮の行事予定表です。
 出力は次の JSON スキーマに従ってください。
 ```json
 {
-  "type": "object",
+  "type": "OBJECT",
   "properties": {
-    "academic_year": { "type": "integer" },
+    "academic_year": { "type": "INTEGER" },
     "events": {
-      "type": "array",
+      "type": "ARRAY",
       "items": {
-        "type": "object",
+        "type": "OBJECT",
         "properties": {
-          "date": { "type": "string" },
-          "grade": { "type": ["integer", "null"] },
-          "name": { "type": "string" }
+          "date": { "type": "STRING" },
+          "grade": { "type": "INTEGER", "nullable": true },
+          "name": { "type": "STRING" }
         },
         "required": ["date", "grade", "name"]
       }
