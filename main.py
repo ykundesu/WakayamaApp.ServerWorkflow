@@ -11,7 +11,7 @@ import sys
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional, List, Dict, Set
+from typing import Optional, List, Dict, Set, Union
 from urllib.parse import urlparse
 
 # パスを追加
@@ -676,7 +676,28 @@ def update_server(
         return success
     except Exception as e:
         logger.exception(f"サーバー更新エラー: {e}")
-        return False
+    return False
+
+
+def parse_rules_models(raw_rules_model: Optional[Union[List[str], str]], default_model: str) -> List[str]:
+    if not raw_rules_model:
+        return [default_model]
+
+    if isinstance(raw_rules_model, str):
+        raw_items = [raw_rules_model]
+    else:
+        raw_items = raw_rules_model
+
+    models: List[str] = []
+    for item in raw_items:
+        if not item:
+            continue
+        for part in str(item).split(","):
+            model = part.strip()
+            if model:
+                models.append(model)
+
+    return models or [default_model]
 
 
 def main():
@@ -689,7 +710,13 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
     parser.add_argument("--api-key", type=str, default=None, help="APIキー（未指定なら環境変数 GOOGLE_API_KEY を使用）")
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="使用するモデル")
-    parser.add_argument("--rules-model", type=str, default=None, help="学校規則処理用モデル（未指定なら --model を使用）")
+    parser.add_argument(
+        "--rules-model",
+        type=str,
+        action="append",
+        default=None,
+        help="学校規則処理用モデル（未指定なら --model を使用、複数指定はカンマ区切り or 複数回指定）",
+    )
     parser.add_argument(
         "--rules-provider",
         choices=["gemini", "openrouter"],
@@ -710,8 +737,9 @@ def main():
     args = parser.parse_args()
     
     logger.info(f"処理タイプ: {args.process}")
+    rules_models = parse_rules_models(args.rules_model, args.model)
     logger.info(f"使用モデル: {args.model}")
-    logger.info(f"規則モデル: {args.rules_model or args.model}")
+    logger.info(f"規則モデル: {', '.join(rules_models)}")
     logger.info(f"規則プロバイダ: {args.rules_provider}")
     logger.info(f"DPI: {args.dpi}")
     logger.info(f"Yomitoku OCR: {'有効' if args.use_yomitoku else '無効'}")
@@ -745,7 +773,6 @@ def main():
         sys.exit(1)
 
     google_api_key = api_key or ""
-    rules_model = args.rules_model or args.model
     
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -841,7 +868,7 @@ def main():
         rules_ok, collected_hashes, rules_did_process = process_school_rules(
             output_dir=output_dir,
             api_key=google_api_key if args.rules_provider == "gemini" else None,
-            model=rules_model,
+            models=rules_models,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             processed_hashes=rules_processed_hashes,

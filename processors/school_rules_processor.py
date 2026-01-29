@@ -509,30 +509,74 @@ def render_pdf_to_markdown(
     return joined
 
 
+def normalize_rules_models(models: Optional[Sequence[str] | str], fallback_model: str) -> List[str]:
+    if not models:
+        return [fallback_model]
+    if isinstance(models, str):
+        raw_items = [models]
+    else:
+        raw_items = list(models)
+
+    normalized: List[str] = []
+    for item in raw_items:
+        if not item:
+            continue
+        for part in str(item).split(","):
+            model = part.strip()
+            if model:
+                normalized.append(model)
+
+    return normalized or [fallback_model]
+
+
 def request_minimal_payload(
-    caller: RulesTextCaller,
+    callers: Sequence[RulesTextCaller],
     markdown: str,
     rule_id: str,
     max_retries: int = 3,
     throttle_sec: float = 1.0,
 ) -> Optional[Dict[str, Any]]:
     base_prompt = build_prompt(markdown)
-    for attempt in range(1, max_retries + 1):
-        try:
-            response_text = caller.call(base_prompt)
-        except Exception as exc:  # pragma: no cover - external API
-            logger.warning("LLM call failed for %s attempt %s: %s", rule_id, attempt, exc)
-            response_text = ""
+    if not callers:
+        return None
 
-        parsed = extract_json_payload(response_text)
-        if isinstance(parsed, dict):
+    for caller_index, caller in enumerate(callers, start=1):
+        for attempt in range(1, max_retries + 1):
             try:
-                return sanitize_minimal_payload(parsed)
-            except Exception as exc:
-                logger.warning("Failed to sanitize payload for %s attempt %s: %s", rule_id, attempt, exc)
+                response_text = caller.call(base_prompt)
+            except Exception as exc:  # pragma: no cover - external API
+                logger.warning(
+                    "LLM call failed for %s model %s attempt %s: %s",
+                    rule_id,
+                    caller.model,
+                    attempt,
+                    exc,
+                )
+                response_text = ""
 
-        if attempt < max_retries:
-            time.sleep(max(throttle_sec, 0.0))
+            parsed = extract_json_payload(response_text)
+            if isinstance(parsed, dict):
+                try:
+                    return sanitize_minimal_payload(parsed)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to sanitize payload for %s model %s attempt %s: %s",
+                        rule_id,
+                        caller.model,
+                        attempt,
+                        exc,
+                    )
+
+            if attempt < max_retries:
+                time.sleep(max(throttle_sec, 0.0))
+
+        if caller_index < len(callers):
+            logger.warning(
+                "Model %s failed after %s attempts for %s. Trying next model.",
+                caller.model,
+                max_retries,
+                rule_id,
+            )
 
     return None
 
@@ -541,6 +585,7 @@ def process_school_rules(
     output_dir: Path,
     api_key: Optional[str],
     model: str = "gemini-2.5-pro",
+    models: Optional[Sequence[str] | str] = None,
     dpi: int = 220,
     use_yomitoku: bool = False,
     rules_url: str = RULES_URL,
@@ -593,14 +638,19 @@ def process_school_rules(
 
     removed_rule_ids = sorted(set(existing_rules_by_id.keys()) - all_rule_ids)
 
-    caller = RulesTextCaller(
-        provider=provider,
-        model=model,
-        gemini_api_key=api_key,
-        openrouter_api_key=openrouter_api_key,
-        temperature=0.2,
-        max_tokens=4096,
-    )
+    model_list = normalize_rules_models(models or model, model)
+    logger.info("Rules model candidates: %s", ", ".join(model_list))
+    callers = [
+        RulesTextCaller(
+            provider=provider,
+            model=selected_model,
+            gemini_api_key=api_key,
+            openrouter_api_key=openrouter_api_key,
+            temperature=0.2,
+            max_tokens=4096,
+        )
+        for selected_model in model_list
+    ]
     ocr = YomitokuOCR(device="cpu")
     generated_at = datetime.now(timezone.utc)
     version = generated_at.strftime("%Y%m%dT%H%M%SZ")
@@ -657,7 +707,7 @@ def process_school_rules(
                 temp_path.replace(pdf_path)
                 logger.info("Regenerating rule: %s", rule.rule_id)
                 markdown_text = render_pdf_to_markdown(pdf_path, markdown_dir, rule.rule_id, dpi, ocr)
-                minimal_payload = request_minimal_payload(caller, markdown_text, rule.rule_id)
+                minimal_payload = request_minimal_payload(callers, markdown_text, rule.rule_id)
                 if minimal_payload is None:
                     logger.error("Failed to extract JSON for rule %s", rule.rule_id)
                     had_error = True
@@ -747,7 +797,8 @@ def process_school_rules(
         "removedRuleIds": removed_rule_ids,
         "rulesUrl": rules_url,
         "provider": provider,
-        "model": model,
+        "model": model_list[0],
+        "models": model_list,
     }
     (rules_output / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),

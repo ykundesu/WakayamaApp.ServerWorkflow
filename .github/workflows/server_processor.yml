@@ -37,7 +37,7 @@ jobs:
             --output-dir ./output \
             --model gemini-3-flash-preview \
             --rules-provider openrouter \
-            --rules-model openai/gpt-oss-120b:free \
+            --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \

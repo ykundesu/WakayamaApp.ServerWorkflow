@@ -93,10 +93,10 @@ class GeminiCaller:
         # google-genai の GenerateContentConfig を使用
         cfg_kwargs: Dict[str, Any] = {"temperature": temperature}
         if schema:
-            # 構造化出力: JSON固定 & スキーマ強制
+            # 構造化出力: JSON固定 & JSON Schema を送信
             cfg_kwargs["response_mime_type"] = "application/json"
-            cfg_kwargs["response_schema"] = schema
-            logger.debug("構造化出力スキーマを設定しました")
+            cfg_kwargs["response_json_schema"] = schema
+            logger.debug("構造化出力JSONスキーマを設定しました")
         self.gen_config = types.GenerateContentConfig(**cfg_kwargs)
         logger.info("GeminiCallerの初期化が完了しました")
 
@@ -115,7 +115,7 @@ class GeminiCaller:
                     temperature=self.temperature,
                     thinking_config=types.ThinkingConfig(thinking_budget=24576),
                     response_mime_type=self.gen_config.response_mime_type if getattr(self.gen_config, "response_mime_type", None) else None,
-                    response_schema=self.gen_config.response_schema if getattr(self.gen_config, "response_schema", None) else None,
+                    response_json_schema=self.gen_config.response_json_schema if getattr(self.gen_config, "response_json_schema", None) else None,
                 ),
             )
             # 構造化出力時は JSON 文字列になる想定

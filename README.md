@@ -53,6 +53,12 @@ python main.py --process classes
 # 学校規則のみ処理
 python main.py --process rules --rules-provider gemini --rules-model gemini-2.5-pro
 
+# 学校規則モデルのフォールバック指定（先頭から順に3回ずつリトライ）
+python main.py --process rules --rules-provider gemini --rules-model gemini-2.5-pro,gemini-2.0-flash
+
+# もしくは複数回指定
+python main.py --process rules --rules-provider gemini --rules-model gemini-2.5-pro --rules-model gemini-2.0-flash
+
 # サーバー更新も含める
 python main.py --process all --update-server --server-repo-url https://github.com/user/repo.git
 ```
