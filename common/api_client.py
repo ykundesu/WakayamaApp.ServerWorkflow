@@ -204,7 +204,7 @@ class OpenRouterCaller:
             logger.debug(f"レスポンス受信: {len(str(result))}文字")
             return result
         except Exception as e:
-            logger.error(f"OpenRouter API呼び出しエラー: {e}", exc_info=True)
+            logger.warning(f"OpenRouter API呼び出しエラー: {e}", exc_info=True)
             raise
 
 

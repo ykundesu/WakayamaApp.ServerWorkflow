@@ -658,7 +658,7 @@ def process_school_rules(
     collected_hashes: List[str] = []
     updated_rule_ids: List[str] = []
     regenerated_rule_ids: List[str] = []
-    had_error = False
+    failed_rule_ids: List[str] = []
 
     rules_meta: List[Dict[str, Any]] = []
 
@@ -694,7 +694,8 @@ def process_school_rules(
             temp_path = pdf_path.with_suffix(".tmp")
             if not download_pdf(rule.pdf_url, temp_path):
                 logger.error("Failed to download PDF: %s", rule.pdf_url)
-                had_error = True
+                if existing_detail is None:
+                    failed_rule_ids.append(rule.rule_id)
                 continue
             pdf_hash = get_file_hash(temp_path)
 
@@ -710,7 +711,7 @@ def process_school_rules(
                 minimal_payload = request_minimal_payload(callers, markdown_text, rule.rule_id)
                 if minimal_payload is None:
                     logger.error("Failed to extract JSON for rule %s", rule.rule_id)
-                    had_error = True
+                    failed_rule_ids.append(rule.rule_id)
                     continue
                 updated_detail = compose_rule_detail(
                     rule,
@@ -792,8 +793,10 @@ def process_school_rules(
         "rulesTotal": len(rule_items),
         "rulesUpdated": len(updated_rule_ids),
         "rulesRegenerated": len(regenerated_rule_ids),
+        "rulesFailed": len(failed_rule_ids),
         "updatedRuleIds": updated_rule_ids,
         "regeneratedRuleIds": regenerated_rule_ids,
+        "failedRuleIds": failed_rule_ids,
         "removedRuleIds": removed_rule_ids,
         "rulesUrl": rules_url,
         "provider": provider,
@@ -812,4 +815,5 @@ def process_school_rules(
         len(removed_rule_ids),
     )
 
+    had_error = bool(failed_rule_ids)
     return not had_error, collected_hashes, bool(updated_rule_ids or regenerated_rule_ids or removed_rule_ids)
