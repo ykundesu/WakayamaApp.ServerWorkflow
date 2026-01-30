@@ -67,28 +67,63 @@ def _soft_json_fixes(text: str) -> str:
     return fixed
 
 
-def extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
-    match = JSON_BLOCK_RE.search(text)
-    candidate = None
-    if match:
-        candidate = match.group("json1") or match.group("json2") or None
-    if not candidate:
-        candidate = _balanced_brace_extract(_strip_code_fences(text))
-    if not candidate:
+def _normalize_payload(parsed: Any) -> Optional[Dict[str, Any]]:
+    expected_keys = {"summary", "sections", "other_texts"}
+    if isinstance(parsed, dict):
+        if expected_keys & set(parsed.keys()):
+            return parsed
         return None
+    if isinstance(parsed, list) and len(parsed) == 1 and isinstance(parsed[0], dict):
+        return _normalize_payload(parsed[0])
+    return None
 
-    try:
-        parsed = json.loads(candidate)
-        return parsed if isinstance(parsed, dict) else None
-    except json.JSONDecodeError:
-        pass
 
+def _try_yaml_parse(text: str) -> Optional[Dict[str, Any]]:
     try:
-        softened = _soft_json_fixes(candidate)
-        parsed = json.loads(softened)
-        return parsed if isinstance(parsed, dict) else None
+        import yaml
     except Exception:
         return None
+    try:
+        parsed = yaml.safe_load(text)
+    except Exception:
+        return None
+    return _normalize_payload(parsed)
+
+
+def extract_json_payload(text: str) -> Optional[Dict[str, Any]]:
+    candidates: List[str] = []
+    match = JSON_BLOCK_RE.search(text)
+    if match:
+        candidate = match.group("json1") or match.group("json2") or None
+        if candidate:
+            candidates.append(candidate)
+
+    stripped = _strip_code_fences(text)
+    balanced = _balanced_brace_extract(stripped)
+    if balanced:
+        candidates.append(balanced)
+    if stripped:
+        candidates.append(stripped)
+
+    for candidate in candidates:
+        if not candidate:
+            continue
+        for variant in (candidate, _soft_json_fixes(candidate)):
+            cleaned = variant.strip()
+            if not cleaned:
+                continue
+            try:
+                parsed = json.loads(cleaned)
+            except json.JSONDecodeError:
+                parsed = None
+            normalized = _normalize_payload(parsed) if parsed is not None else None
+            if normalized is not None:
+                return normalized
+            yaml_parsed = _try_yaml_parse(cleaned)
+            if yaml_parsed is not None:
+                return yaml_parsed
+
+    return None
 
 
 def sanitize_minimal_payload(data: Dict[str, Any]) -> Dict[str, Any]:

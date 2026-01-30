@@ -10,7 +10,11 @@ import json
 import base64
 import io
 import logging
-from typing import Any, Dict, List, Optional, Union
+import random
+import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from typing import Any, Dict, List, Optional, Union, Mapping
 from PIL import Image
 
 from .json_extractor import try_json_loads, JsonType
@@ -32,7 +36,7 @@ try:
 except ImportError:
     _requests_available = False
 
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_exception
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 
 def is_503_error(exception: Exception) -> bool:
@@ -57,6 +61,44 @@ def is_503_error(exception: Exception) -> bool:
             if code == 503 or status == "UNAVAILABLE":
                 return True
     return False
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(value)
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return max(0.0, (parsed - datetime.now(timezone.utc)).total_seconds())
+
+
+def _parse_rate_limit_reset(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        reset = float(value)
+    except ValueError:
+        return None
+    if reset > 1_000_000_000:
+        return max(0.0, reset - time.time())
+    return max(0.0, reset)
+
+
+def _retry_after_from_headers(headers: Mapping[str, str]) -> Optional[float]:
+    retry_after = _parse_retry_after(headers.get("Retry-After"))
+    if retry_after is not None:
+        return retry_after
+    return (
+        _parse_rate_limit_reset(headers.get("X-RateLimit-Reset"))
+        or _parse_rate_limit_reset(headers.get("X-RateLimit-Reset-Requests"))
+    )
 
 
 def pil_to_png_bytes(im: Image.Image) -> bytes:
@@ -156,8 +198,6 @@ class OpenRouterCaller:
         self.max_tokens = max_tokens
         logger.info("OpenRouterCallerの初期化が完了しました")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=10),
-           retry=retry_if_exception_type(Exception))
     def call_multimodal(self, prompt_text: str, images: Dict[str, Image.Image],
                        extra_headers: Optional[Dict[str, str]] = None,
                        extra_body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -196,16 +236,54 @@ class OpenRouterCaller:
         if extra_body:
             body.update(extra_body)
 
-        try:
-            resp = requests.post(self.OPENROUTER_API_URL, headers=headers, data=json.dumps(body), timeout=120)
-            resp.raise_for_status()
-            result = resp.json()
-            logger.info("OpenRouter API呼び出しが成功しました")
-            logger.debug(f"レスポンス受信: {len(str(result))}文字")
-            return result
-        except Exception as e:
-            logger.warning(f"OpenRouter API呼び出しエラー: {e}", exc_info=True)
-            raise
+        max_attempts = 5
+        base_delay = 2.0
+        max_delay = 60.0
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.post(
+                    self.OPENROUTER_API_URL,
+                    headers=headers,
+                    data=json.dumps(body),
+                    timeout=120,
+                )
+                if resp.status_code in {429, 503}:
+                    retry_after = _retry_after_from_headers(resp.headers)
+                    wait_seconds = retry_after if retry_after is not None else min(max_delay, base_delay * (2 ** (attempt - 1)))
+                    wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "OpenRouter APIがレート制限/過負荷です (status=%s)。%.1f秒待機して再試行します (%s/%s)",
+                            resp.status_code,
+                            wait_seconds,
+                            attempt,
+                            max_attempts,
+                        )
+                        time.sleep(wait_seconds)
+                        continue
+                resp.raise_for_status()
+                result = resp.json()
+                logger.info("OpenRouter API呼び出しが成功しました")
+                logger.debug(f"レスポンス受信: {len(str(result))}文字")
+                return result
+            except requests.RequestException as e:
+                if attempt < max_attempts:
+                    wait_seconds = min(max_delay, base_delay * (2 ** (attempt - 1)))
+                    wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
+                    logger.warning(
+                        "OpenRouter API呼び出しエラー: %s。%.1f秒待機して再試行します (%s/%s)",
+                        e,
+                        wait_seconds,
+                        attempt,
+                        max_attempts,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                logger.warning("OpenRouter API呼び出しエラー: %s", e, exc_info=True)
+                raise
+
+        raise RuntimeError("OpenRouter API呼び出しが失敗しました。")
 
 
 @retry(stop=stop_after_attempt(5), wait=wait_exponential(multiplier=2, min=2, max=30),
