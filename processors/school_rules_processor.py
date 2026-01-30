@@ -27,6 +27,39 @@ JSON_BLOCK_RE = re.compile(
     re.DOTALL,
 )
 
+RULES_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "summary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        "sections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "title": {"type": "string"},
+                    "articles": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "label": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                                "content": {"type": "string"},
+                            },
+                            "required": ["label", "content"],
+                        },
+                    },
+                },
+                "required": ["title", "articles"],
+            },
+        },
+        "other_texts": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    },
+    "required": ["summary", "sections", "other_texts"],
+}
+
 
 @dataclass
 class RuleItem:
@@ -290,6 +323,7 @@ class RulesTextCaller:
                 api_key=openrouter_api_key,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                schema=RULES_SCHEMA,
             )
 
     def call(self, prompt: str) -> str:

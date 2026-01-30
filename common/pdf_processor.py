@@ -52,7 +52,8 @@ class PDFProcessor:
                 model=model,
                 api_key=api_key,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                schema=schema,
             )
         else:
             logger.debug("GeminiCallerを作成中...")

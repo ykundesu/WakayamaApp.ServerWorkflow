@@ -179,11 +179,12 @@ class GeminiCaller:
 
 class OpenRouterCaller:
     """OpenRouter API呼び出しクラス"""
-    
+
     OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
-    
+
     def __init__(self, model: str, api_key: Optional[str] = None,
-                 temperature: float = 0.2, max_tokens: int = 2000):
+                 temperature: float = 0.2, max_tokens: int = 2000,
+                 schema: Optional[Dict[str, Any]] = None):
         logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}, max_tokens={max_tokens}")
         if not _requests_available:
             raise RuntimeError("requests パッケージがインストールされていません。")
@@ -196,7 +197,22 @@ class OpenRouterCaller:
         self.model = model
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.schema = schema
+        self.response_format = self._build_response_format(schema)
         logger.info("OpenRouterCallerの初期化が完了しました")
+
+    @staticmethod
+    def _build_response_format(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not schema:
+            return None
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "output",
+                "schema": schema,
+                "strict": True,
+            },
+        }
 
     def call_multimodal(self, prompt_text: str, images: Dict[str, Image.Image],
                        extra_headers: Optional[Dict[str, str]] = None,
@@ -235,6 +251,8 @@ class OpenRouterCaller:
         }
         if extra_body:
             body.update(extra_body)
+        if self.response_format and "response_format" not in body:
+            body["response_format"] = self.response_format
 
         max_attempts = 5
         base_delay = 2.0
