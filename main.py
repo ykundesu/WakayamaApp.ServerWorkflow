@@ -136,6 +136,7 @@ def process_dormitory_meals(
                 if not download_pdf(pdf_url, pdf_path):
                     error_message = f"{label} のPDFのダウンロードに失敗しました。"
                     logger.error(error_message)
+                    logger.info("had error is true")
                     had_error = True
                     if discord_webhook:
                         notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
@@ -168,6 +169,7 @@ def process_dormitory_meals(
                     if not download_pdf(pdf_url, pdf_path):
                         error_message = f"{label} のPDFのダウンロードに失敗しました。"
                         logger.error(error_message)
+                        logger.info("had error is true")  
                         had_error = True
                         if discord_webhook:
                             notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
@@ -206,6 +208,7 @@ def process_dormitory_meals(
                 error_message = f"{label} のPDF処理に失敗しました。"
                 logger.error(error_message)
                 had_error = True
+                logger.info("had error is true")
                 if discord_webhook:
                     notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
         

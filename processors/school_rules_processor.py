@@ -850,5 +850,9 @@ def process_school_rules(
         len(removed_rule_ids),
     )
 
-    had_error = bool(failed_rule_ids)
+    logger.info("School rules processing finished")
+    for for_rule in failed_rule_ids:
+        logger.error("Failed to process rule: %s", for_rule)
+
+    had_error = len(failed_rule_ids) != 0
     return not had_error, collected_hashes, bool(updated_rule_ids or regenerated_rule_ids or removed_rule_ids)
