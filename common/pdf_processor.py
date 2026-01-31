@@ -29,7 +29,6 @@ class PDFProcessor:
         schema: Optional[Dict[str, Any]] = None,
         dpi: int = 220,
         temperature: float = 0.2,
-        max_tokens: int = 2000,
         use_yomitoku: bool = False,
         yomitoku_device: str = "cpu",
         yomitoku_config: Optional[Path] = None,
@@ -40,7 +39,6 @@ class PDFProcessor:
         self.schema = schema
         self.dpi = dpi
         self.temperature = temperature
-        self.max_tokens = max_tokens
         
         # モデル名に '/' が含まれる場合（例: 'google/gemini-2.5-flash'）は OpenRouter 前提とみなす
         self.use_openrouter = ("/" in model)
@@ -52,7 +50,6 @@ class PDFProcessor:
                 model=model,
                 api_key=api_key,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 schema=schema,
             )
         else:

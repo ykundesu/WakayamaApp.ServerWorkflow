@@ -14,7 +14,7 @@ import random
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Dict, List, Optional, Union, Mapping
+from typing import Any, Dict, List, Optional, Union, Mapping, cast
 from PIL import Image
 
 from .json_extractor import try_json_loads, JsonType
@@ -27,6 +27,8 @@ try:
     from google.genai import types
     _gemini_available = True
 except ImportError:
+    genai = None
+    types = None
     _gemini_available = False
 
 # OpenRouter API用
@@ -34,20 +36,20 @@ try:
     import requests
     _requests_available = True
 except ImportError:
+    requests = None
     _requests_available = False
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 
-def is_503_error(exception: Exception) -> bool:
+def is_503_error(exception: BaseException) -> bool:
     """503エラーを検出する関数"""
     error_str = str(exception)
     # エラーメッセージに "503" または "UNAVAILABLE" が含まれているか確認
     if "503" in error_str or "UNAVAILABLE" in error_str:
         return True
     # requests の HTTPError の場合
-    if _requests_available:
-        import requests
+    if _requests_available and requests is not None:
         if isinstance(exception, requests.HTTPError):
             if hasattr(exception, "response") and exception.response is not None:
                 if exception.response.status_code == 503:
@@ -161,6 +163,8 @@ class GeminiCaller:
         logger.info(f"GeminiCallerを初期化中: model={model_name}, temperature={temperature}")
         if not _gemini_available:
             raise RuntimeError("google-genai パッケージがインストールされていません。")
+        assert genai is not None
+        assert types is not None
         
         api_key = api_key or os.getenv("GOOGLE_API_KEY")
         if not api_key:
@@ -187,12 +191,13 @@ class GeminiCaller:
     def generate(self, prompt: str, images: List[Image.Image]) -> JsonType:
         logger.info(f"Gemini API呼び出し中: model={self.model_name}, 画像数={len(images)}")
         logger.debug(f"プロンプト長: {len(prompt)}文字")
+        assert types is not None
         # google-genai: Client 経由で呼ぶ
-        parts = [prompt] + images
+        parts: List[Any] = [prompt] + images
         try:
             resp = self.client.models.generate_content(
                 model=self.model_name,
-                contents=parts,
+                contents=cast(Any, parts),
                 config=types.GenerateContentConfig(
                     temperature=self.temperature,
                     thinking_config=types.ThinkingConfig(thinking_budget=24576),
@@ -200,6 +205,7 @@ class GeminiCaller:
                     response_json_schema=self.gen_config.response_json_schema if getattr(self.gen_config, "response_json_schema", None) else None,
                 ),
             )
+            resp = cast(Any, resp)
             # 構造化出力時は JSON 文字列になる想定
             text = getattr(resp, "text", None) or (resp.candidates[0].content.parts[0].text if resp and resp.candidates and resp.candidates[0].content.parts else "")
             if not text:
@@ -227,11 +233,10 @@ class OpenRouterCaller:
         model: str,
         api_key: Optional[str] = None,
         temperature: float = 0.2,
-        max_tokens: int = 2000,
         schema: Optional[Dict[str, Any]] = None,
         provider: Optional[Union[str, Mapping[str, Any]]] = None,
     ):
-        logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}, max_tokens={max_tokens}")
+        logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}")
         if not _requests_available:
             raise RuntimeError("requests パッケージがインストールされていません。")
         
@@ -242,7 +247,6 @@ class OpenRouterCaller:
         self.api_key = api_key
         self.model = model
         self.temperature = temperature
-        self.max_tokens = max_tokens
         self.schema = schema
         self.provider = _normalize_openrouter_provider(provider)
         self.response_format = self._build_response_format(schema)
@@ -270,6 +274,7 @@ class OpenRouterCaller:
         """
         logger.info(f"OpenRouter API呼び出し中: model={self.model}, 画像数={len(images)}")
         logger.debug(f"プロンプト長: {len(prompt_text)}文字, 画像キー: {list(images.keys())}")
+        assert requests is not None
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -282,8 +287,12 @@ class OpenRouterCaller:
             data_url = img_to_data_url(im)
             data_urls.append({"type": "image_url", "image_url": {"url": data_url, "detail": "high"}, "id": vname})
 
-        image_refs = " ".join([f"{vname}: <image:{vname}>" for vname in images.keys()])
-        full_prompt_content = [{"type": "text", "text": f"{image_refs} {prompt_text}"}] + data_urls
+        if data_urls:
+            image_refs = " ".join([f"{vname}: <image:{vname}>" for vname in images.keys()])
+            prompt = f"{image_refs} {prompt_text}".strip()
+            full_prompt_content = [{"type": "text", "text": prompt}] + data_urls
+        else:
+            full_prompt_content = prompt_text
 
         body = {
             "model": self.model,
@@ -294,7 +303,6 @@ class OpenRouterCaller:
                 }
             ],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
         }
         if self.provider is not None and "provider" not in body:
             body["provider"] = self.provider
@@ -302,6 +310,34 @@ class OpenRouterCaller:
             body.update(extra_body)
         if self.response_format and "response_format" not in body:
             body["response_format"] = self.response_format
+
+        def _redact_body_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
+            try:
+                redacted = json.loads(json.dumps(payload, ensure_ascii=False))
+            except Exception:
+                redacted = dict(payload)
+            messages = redacted.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if not isinstance(message, dict):
+                        continue
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") == "image_url":
+                                image_url = item.get("image_url")
+                                if isinstance(image_url, dict):
+                                    url = image_url.get("url")
+                                    if isinstance(url, str):
+                                        image_url["url"] = f"<omitted {len(url)} chars>"
+            return redacted
+
+        logger.info(
+            "OpenRouter request body (redacted): %s",
+            json.dumps(_redact_body_for_log(body), ensure_ascii=False),
+        )
 
         max_attempts = 5
         base_delay = 2.0
@@ -361,7 +397,6 @@ def call_gemini_multimodal(
     prompt_text: str,
     images: Dict[str, Image.Image],
     temperature: float = 0.2,
-    max_tokens: int = 2000,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -379,6 +414,7 @@ def call_gemini_multimodal(
 
     if not _requests_available:
         raise RuntimeError("requests パッケージがインストールされていません。")
+    assert requests is not None
 
     image_parts: List[Dict[str, Any]] = []
     # full, top, bottom の順を保つ（辞書順だと順不同になりうるため）
@@ -407,12 +443,12 @@ def call_gemini_multimodal(
     # generationConfig
     gen_cfg: Dict[str, Any] = {
         "temperature": temperature,
-        "maxOutputTokens": max_tokens
     }
 
     if extra_body:
         # ユーザーが追加で上書きしたいフィールドがあれば反映
         gen_cfg.update(extra_body.get("generationConfig", {}))
+    gen_cfg.pop("maxOutputTokens", None)
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     params = {"key": api_key}

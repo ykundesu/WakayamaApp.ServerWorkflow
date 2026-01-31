@@ -26,6 +26,7 @@ JSON_BLOCK_RE = re.compile(
     r"(?:```json\s*(?P<json1>\{.*?\})\s*```)|(?P<json2>\{.*\})",
     re.DOTALL,
 )
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 RULES_SCHEMA = {
     "type": "object",
@@ -203,6 +204,20 @@ def sanitize_minimal_payload(data: Dict[str, Any]) -> Dict[str, Any]:
     return {"summary": summary, "sections": sections, "other_texts": other_texts}
 
 
+def sanitize_rules_markdown(markdown: str, rule_id: str) -> str:
+    if not isinstance(markdown, str):
+        markdown = str(markdown or "")
+    cleaned = CONTROL_CHAR_RE.sub("", markdown)
+    if cleaned != markdown:
+        logger.warning(
+            "Rules markdown sanitized for %s: %s -> %s chars",
+            rule_id,
+            len(markdown),
+            len(cleaned),
+        )
+    return cleaned
+
+
 def split_article_label(text: str) -> Tuple[Optional[str], str]:
     stripped = text.strip()
     match = ARTICLE_LABEL_RE.match(stripped)
@@ -309,20 +324,17 @@ class RulesTextCaller:
         gemini_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
         temperature: float = 0.2,
-        max_tokens: int = 4096,
     ):
         self.provider = provider
         self.model = model
         self.gemini_api_key = gemini_api_key
         self.temperature = temperature
-        self.max_tokens = max_tokens
         self._openrouter: Optional[OpenRouterCaller] = None
         if provider == "openrouter":
             self._openrouter = OpenRouterCaller(
                 model=model,
                 api_key=openrouter_api_key,
                 temperature=temperature,
-                max_tokens=max_tokens,
                 schema=RULES_SCHEMA,
             )
 
@@ -347,7 +359,6 @@ class RulesTextCaller:
             prompt_text=prompt,
             images={},
             temperature=self.temperature,
-            max_tokens=self.max_tokens,
         )
         candidates = response.get("candidates") or []
         if not candidates:
@@ -605,7 +616,20 @@ def request_minimal_payload(
     max_retries: int = 3,
     throttle_sec: float = 1.0,
 ) -> Optional[Dict[str, Any]]:
-    base_prompt = build_prompt(markdown)
+    if not markdown or not markdown.strip():
+        logger.warning("Rules markdown empty for %s; skipping LLM call", rule_id)
+        return None
+    cleaned_markdown = sanitize_rules_markdown(markdown, rule_id)
+    if not cleaned_markdown.strip():
+        logger.warning("Rules markdown empty after sanitize for %s; skipping LLM call", rule_id)
+        return None
+    base_prompt = build_prompt(cleaned_markdown)
+    logger.debug(
+        "Rules prompt size: %s chars (markdown: %s chars, sanitized: %s chars)",
+        len(base_prompt),
+        len(markdown),
+        len(cleaned_markdown),
+    )
     if not callers:
         return None
 
@@ -626,7 +650,7 @@ def request_minimal_payload(
             parsed = extract_json_payload(response_text)
             if isinstance(parsed, dict):
                 try:
-                    return sanitize_minimal_payload(parsed)
+                    sanitized = sanitize_minimal_payload(parsed)
                 except Exception as exc:
                     logger.warning(
                         "Failed to sanitize payload for %s model %s attempt %s: %s",
@@ -635,6 +659,16 @@ def request_minimal_payload(
                         attempt,
                         exc,
                     )
+                else:
+                    if not sanitized.get("sections") and not sanitized.get("other_texts"):
+                        logger.warning(
+                            "LLM returned empty payload for %s model %s attempt %s",
+                            rule_id,
+                            caller.model,
+                            attempt,
+                        )
+                    else:
+                        return sanitized
 
             if attempt < max_retries:
                 time.sleep(max(throttle_sec, 0.0))
@@ -715,8 +749,6 @@ def process_school_rules(
             model=selected_model,
             gemini_api_key=api_key,
             openrouter_api_key=openrouter_api_key,
-            temperature=0.2,
-            max_tokens=4096,
         )
         for selected_model in model_list
     ]

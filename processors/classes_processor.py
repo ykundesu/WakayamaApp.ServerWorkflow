@@ -88,7 +88,6 @@ def process_classes_pdf(
     api_key: Optional[str] = None,
     dpi: int = 220,
     temperature: float = 0.5,
-    max_tokens: int = 2000,
     use_yomitoku: bool = False,
     yomitoku_device: str = "cpu",
     yomitoku_config: Optional[Path] = None,
@@ -103,7 +102,6 @@ def process_classes_pdf(
         api_key: APIキー
         dpi: レンダリングDPI
         temperature: 温度パラメータ
-        max_tokens: 最大トークン数
         use_yomitoku: Yomitoku OCRを使用するか
         yomitoku_device: Yomitokuデバイス
         yomitoku_config: Yomitoku設定ファイルパス
@@ -132,7 +130,6 @@ def process_classes_pdf(
             schema=None,  # スキーマはプロンプトに含める
             dpi=dpi,
             temperature=temperature,
-            max_tokens=max_tokens,
             use_yomitoku=use_yomitoku,
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
