@@ -64,6 +64,8 @@ def check_image_updated(
 
     Returns (is_updated, new_hash).
     """
+    if last_hash is not None and last_hash == get_file_hash(local_path):
+        return False, last_hash
     url_changed = bool(last_url and last_url != url)
 
     if not local_path.exists() or url_changed:
