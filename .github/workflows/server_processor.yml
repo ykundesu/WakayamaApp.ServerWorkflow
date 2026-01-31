@@ -41,7 +41,8 @@ jobs:
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \
-            --use-yomitoku
+            --use-yomitoku \
+            --openrouter-provider "provider: { order: ['deepinfra/fp4', 'ncompass', 'novita/fp4'], allow_fallbacks: true}"
       
       - name: Upload output artifacts
         if: always()

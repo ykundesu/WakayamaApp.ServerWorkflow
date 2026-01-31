@@ -101,6 +101,46 @@ def _retry_after_from_headers(headers: Mapping[str, str]) -> Optional[float]:
     )
 
 
+def _normalize_openrouter_provider(
+    raw: Optional[Union[str, Mapping[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    if raw is None:
+        raw = os.getenv("OPENROUTER_PROVIDER")
+    if raw is None:
+        return None
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    if isinstance(raw, str):
+        value = raw.strip()
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            order = [part.strip() for part in value.split(",") if part.strip()]
+            if order:
+                return {"order": order}
+            logger.warning("OpenRouter provider filter must be JSON: %s", value)
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        if isinstance(parsed, list):
+            order = [str(item).strip() for item in parsed if str(item).strip()]
+            if order:
+                return {"order": order}
+            return None
+        logger.warning(
+            "OpenRouter provider filter must be JSON object or array, got %s",
+            type(parsed).__name__,
+        )
+        return None
+    logger.warning(
+        "OpenRouter provider filter must be dict or JSON string, got %s",
+        type(raw).__name__,
+    )
+    return None
+
+
 def pil_to_png_bytes(im: Image.Image) -> bytes:
     buf = io.BytesIO()
     im.save(buf, format="PNG")
@@ -182,9 +222,15 @@ class OpenRouterCaller:
 
     OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-    def __init__(self, model: str, api_key: Optional[str] = None,
-                 temperature: float = 0.2, max_tokens: int = 2000,
-                 schema: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: Optional[str] = None,
+        temperature: float = 0.2,
+        max_tokens: int = 2000,
+        schema: Optional[Dict[str, Any]] = None,
+        provider: Optional[Union[str, Mapping[str, Any]]] = None,
+    ):
         logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}, max_tokens={max_tokens}")
         if not _requests_available:
             raise RuntimeError("requests パッケージがインストールされていません。")
@@ -198,6 +244,7 @@ class OpenRouterCaller:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.schema = schema
+        self.provider = _normalize_openrouter_provider(provider)
         self.response_format = self._build_response_format(schema)
         logger.info("OpenRouterCallerの初期化が完了しました")
 
@@ -249,6 +296,8 @@ class OpenRouterCaller:
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
         }
+        if self.provider is not None and "provider" not in body:
+            body["provider"] = self.provider
         if extra_body:
             body.update(extra_body)
         if self.response_format and "response_format" not in body:

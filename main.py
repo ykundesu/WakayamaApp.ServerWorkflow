@@ -730,6 +730,12 @@ def main():
         help="学校規則の抽出プロバイダ",
     )
     parser.add_argument("--openrouter-api-key", type=str, default=None, help="OpenRouter APIキー（未指定なら環境変数 OPENROUTER_API_KEY を使用）")
+    parser.add_argument(
+        "--openrouter-provider",
+        type=str,
+        default=None,
+        help="OpenRouter provider filter JSON（例: '{\"order\":[\"anthropic\",\"amazon-bedrock\"],\"allow_fallbacks\":true}'）",
+    )
     parser.add_argument("--dpi", type=int, default=220, help="レンダリングDPI")
     parser.add_argument("--use-yomitoku", action="store_true", help="Yomitoku OCRを使用")
     parser.add_argument("--prompt-file", type=Path, default=None, help="プロンプトファイルパス（寮食処理用）")
@@ -741,6 +747,9 @@ def main():
     parser.add_argument("--branch", type=str, default="main", help="Gitブランチ")
     
     args = parser.parse_args()
+
+    if args.openrouter_provider:
+        os.environ["OPENROUTER_PROVIDER"] = args.openrouter_provider
     
     logger.info(f"処理タイプ: {args.process}")
     rules_models = parse_rules_models(args.rules_model, args.model)
@@ -755,13 +764,15 @@ def main():
     # 環境変数から取得
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
     openrouter_api_key = args.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
+    openrouter_provider = os.getenv("OPENROUTER_PROVIDER")
     discord_webhook = args.discord_webhook or os.getenv("DISCORD_WEBHOOK_URL")
     github_token = args.github_token or os.getenv("GITHUB_TOKEN")
     
     logger.debug(
-        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
+        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, OPENROUTER_PROVIDER=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
         "設定済み" if api_key else "未設定",
         "設定済み" if openrouter_api_key else "未設定",
+        "設定済み" if openrouter_provider else "未設定",
         "設定済み" if discord_webhook else "未設定",
         "設定済み" if github_token else "未設定",
     )

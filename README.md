@@ -33,6 +33,7 @@ pip install -r requirements.txt
 2. 環境変数を設定:
 - `GOOGLE_API_KEY`: Google Gemini APIキー
 - `OPENROUTER_API_KEY`: OpenRouter APIキー（学校規則の抽出でOpenRouterを使う場合）
+- `OPENROUTER_PROVIDER`: OpenRouter providerフィルタ（JSON文字列。例: {"order":["anthropic","amazon-bedrock","google-vertex"],"allow_fallbacks":true}）
 - `DISCORD_WEBHOOK_URL`: Discord Webhook URL（オプション）
 - `GITHUB_TOKEN`: GitHubトークン（サーバー更新用）
 
@@ -73,6 +74,7 @@ GitHub Secretsに以下を設定してください:
 
 - `GOOGLE_API_KEY`: Google Gemini APIキー
 - `OPENROUTER_API_KEY`: OpenRouter APIキー（学校規則の抽出でOpenRouterを使う場合）
+- `OPENROUTER_PROVIDER`: OpenRouter providerフィルタ（JSON文字列）
 - `DISCORD_WEBHOOK_URL`: Discord Webhook URL
 - `GITHUBACCOUNT_TOKEN`: GitHubトークン（情報リポジトリの更新用）
 - `SERVER_REPO_URL`: WakayamaServerリポジトリURL（例: https://github.com/user/WakayamaServer.git）
