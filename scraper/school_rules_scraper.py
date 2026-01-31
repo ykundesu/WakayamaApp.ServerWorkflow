@@ -7,11 +7,11 @@ from __future__ import annotations
 import logging
 import re
 import time
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, Iterator, List, Optional, cast
 from urllib.parse import urljoin
 
 import requests
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
 
 logger = logging.getLogger(__name__)
 
@@ -50,14 +50,23 @@ def fetch_html(url: str, timeout: float = 15.0, retries: int = 3, backoff: float
     raise RuntimeError(f"failed to fetch: {url} ({last_exc})")
 
 
-def _iter_anchors(nodes: Iterable[Tag]) -> Iterable[Tag]:
+def _normalize_href(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "".join(str(item) for item in value).strip()
+    return str(value).strip()
+
+
+def _iter_anchors(nodes: Iterable[Tag]) -> Iterator[Tag]:
     for node in nodes:
         if not isinstance(node, Tag):
             continue
         if node.name == "a" and node.has_attr("href"):
             yield node
         for anchor in node.find_all("a", href=True):
-            yield anchor
+            if isinstance(anchor, Tag):
+                yield anchor
 
 
 def extract_links(nodes: List[Tag], base_url: Optional[str], pdf_only: bool = False) -> List[Dict[str, str]]:
@@ -66,7 +75,7 @@ def extract_links(nodes: List[Tag], base_url: Optional[str], pdf_only: bool = Fa
     seen = set()
     for anchor in _iter_anchors(nodes):
         name = normalize_text(anchor.get_text(strip=True))
-        href = (anchor.get("href") or "").strip()
+        href = _normalize_href(anchor.get("href"))
         if not name or not href:
             continue
         if pdf_only and not href.lower().endswith(".pdf"):
@@ -77,6 +86,38 @@ def extract_links(nodes: List[Tag], base_url: Optional[str], pdf_only: bool = Fa
             continue
         seen.add(key)
         items.append({"name": name, "url": url})
+    return items
+
+
+def extract_links_until_next_heading(
+    heading: Tag,
+    container: Tag,
+    base_url: Optional[str],
+    pdf_only: bool = False,
+) -> List[Dict[str, str]]:
+    """Extract links from nodes following the heading until the next heading."""
+    items: List[Dict[str, str]] = []
+    seen = set()
+    for element in heading.next_elements:
+        if isinstance(element, Tag):
+            if container not in element.parents:
+                break
+            if element.name in {"h1", "h2", "h3"}:
+                break
+            if element.name != "a" or not element.has_attr("href"):
+                continue
+            name = normalize_text(element.get_text(strip=True))
+            href = _normalize_href(element.get("href"))
+            if not name or not href:
+                continue
+            if pdf_only and not href.lower().endswith(".pdf"):
+                continue
+            url = urljoin(base_url or "", href)
+            key = (name, url)
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append({"name": name, "url": url})
     return items
 
 
@@ -93,7 +134,7 @@ def parse_rules(html: str, base_url: Optional[str] = None, pdf_only: bool = Fals
         return []
 
     container = soup.select_one("div.pagebody") or soup
-    headings = container.find_all(["h2", "h3"])
+    headings: List[Tag] = [cast(Tag, h) for h in container.find_all(["h2", "h3"]) if isinstance(h, Tag)]
     result: List[Dict[str, object]] = []
 
     for heading in headings:
@@ -101,30 +142,7 @@ def parse_rules(html: str, base_url: Optional[str] = None, pdf_only: bool = Fals
         if not title:
             continue
 
-        section_nodes: List[Tag] = []
-        for sibling in heading.next_siblings:
-            if isinstance(sibling, NavigableString):
-                if not sibling.strip():
-                    continue
-                continue
-            if isinstance(sibling, Tag) and sibling.name in {"h1", "h2", "h3"}:
-                break
-            if isinstance(sibling, Tag):
-                section_nodes.append(sibling)
-
-        items = extract_links(section_nodes, base_url, pdf_only=pdf_only)
-
-        if not items:
-            parent = heading.parent
-            if isinstance(parent, Tag):
-                extra_nodes: List[Tag] = []
-                for sibling in parent.next_siblings:
-                    if isinstance(sibling, Tag) and sibling.name in {"h1", "h2", "h3"}:
-                        break
-                    if isinstance(sibling, Tag):
-                        extra_nodes.append(sibling)
-                if extra_nodes:
-                    items = extract_links(extra_nodes, base_url, pdf_only=pdf_only)
+        items = extract_links_until_next_heading(heading, container, base_url, pdf_only=pdf_only)
 
         if items:
             result.append({"name": title, "contents": items})
