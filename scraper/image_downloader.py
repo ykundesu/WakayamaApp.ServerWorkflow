@@ -64,13 +64,20 @@ def check_image_updated(
 
     Returns (is_updated, new_hash).
     """
-    if last_hash is not None and last_hash == get_file_hash(local_path):
+    local_hash = get_file_hash(local_path)
+    if last_hash is not None and last_hash == local_hash:
         return False, last_hash
     url_changed = bool(last_url and last_url != url)
 
     if not local_path.exists() or url_changed:
-        if download_image(url, local_path):
-            return True, get_file_hash(local_path)
+        temp_path = local_path.with_suffix(".tmp")
+        if download_image(url, temp_path):
+            new_hash = get_file_hash(temp_path)
+            if new_hash and last_hash and not url_changed and new_hash == last_hash:
+                temp_path.unlink(missing_ok=True)
+                return False, new_hash
+            temp_path.replace(local_path)
+            return True, new_hash
         return True, None
 
     temp_path = local_path.with_suffix(".tmp")
