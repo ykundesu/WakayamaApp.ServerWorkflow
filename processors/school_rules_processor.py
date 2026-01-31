@@ -772,6 +772,8 @@ def process_school_rules(
                 logger.info("PDF already processed (hash match), skipping content regeneration: %s", rule.rule_id)
                 temp_path.replace(pdf_path)
                 needs_content_update = False
+                if pdf_hash:
+                    collected_hashes.append(pdf_hash)
                 needs_metadata_update = True
             else:
                 temp_path.replace(pdf_path)
