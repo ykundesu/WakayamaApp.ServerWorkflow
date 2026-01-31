@@ -389,6 +389,7 @@ def process_dormitory_events(
 
     last_url = processed_state.get("last_url")
     last_hash = processed_state.get("last_hash")
+    print(f"前回の状態: last_url={last_url}, last_hash={last_hash}")
 
     def save_state(state: Dict[str, Optional[str]]) -> None:
         if not state.get("last_url"):
@@ -429,6 +430,7 @@ def process_dormitory_events(
             last_url=last_url,
             last_hash=last_hash,
         )
+        print(f"更新結果: updated={updated}, new_hash={new_hash}")
 
         if not updated:
             logger.info("寮行事予定画像が更新されていません。")
@@ -440,6 +442,7 @@ def process_dormitory_events(
 
         if new_hash is None:
             new_hash = get_image_hash(image_path)
+            print("再計算したハッシュ:", new_hash)
         if new_hash is None:
             error_message = "画像のダウンロードまたはハッシュ計算に失敗しました。"
             logger.error(error_message)
