@@ -294,8 +294,8 @@ def compose_rule_detail(
         "pdfUrl": rule.pdf_url,
         "sourcePage": None,
         "lastUpdated": last_updated,
-        "sections": sections_output or None,
-        "articles": fallback_articles or None,
+        "sections": sections_output,
+        "articles": fallback_articles,
         "relatedIds": None,
     }
     return detail
@@ -782,6 +782,12 @@ def process_school_rules(
                     logger.error("Failed to extract JSON for rule %s", rule.rule_id)
                     failed_rule_ids.append(rule.rule_id)
                     continue
+                if not minimal_payload.get("sections") and not minimal_payload.get("other_texts"):
+                    logger.warning(
+                        "LLM payload empty for %s (%s)",
+                        rule.rule_id,
+                        rule.pdf_url,
+                    )
                 updated_detail = compose_rule_detail(
                     rule,
                     minimal_payload,
@@ -805,6 +811,12 @@ def process_school_rules(
             updated_rule_ids.append(rule.rule_id)
 
         if updated_detail:
+            if not updated_detail.get("sections") and not updated_detail.get("articles"):
+                logger.warning(
+                    "Rule content empty after compose: %s (%s)",
+                    rule.rule_id,
+                    rule.pdf_url,
+                )
             rule_json_path = rules_dir / f"{rule.rule_id}.json"
             rule_json_path.write_text(json.dumps(updated_detail, ensure_ascii=False, indent=2), encoding="utf-8")
 
