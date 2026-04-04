@@ -14,6 +14,29 @@ from typing import Dict, List, Literal, Optional, Set, Tuple
 logger = logging.getLogger(__name__)
 
 
+def has_server_target_data(
+    server_repo_path: Path,
+    target_name: Literal["meals", "classes", "dormitory_events", "school_rules"],
+) -> bool:
+    """サーバーリポジトリ側に対象データが存在するか確認する。"""
+    if target_name == "meals":
+        target_dir = server_repo_path / "v1" / "meals"
+        return target_dir.exists() and any(target_dir.glob("*.json"))
+
+    if target_name == "classes":
+        target_dir = server_repo_path / "v1" / "classes"
+        return target_dir.exists() and any(target_dir.rglob("*.json"))
+
+    if target_name == "dormitory_events":
+        target_dir = server_repo_path / "v1" / "dormitory" / "events"
+        return target_dir.exists() and any(target_dir.glob("*.json"))
+
+    target_dir = server_repo_path / "v1" / "school-rules"
+    rules_dir = target_dir / "rules"
+    index_path = target_dir / "index.json"
+    return index_path.exists() and rules_dir.exists() and any(rules_dir.glob("*.json"))
+
+
 def copy_final_files(source_dir: Path, target_dir: Path) -> List[Tuple[Path, Path]]:
     """
     final/ディレクトリ内のファイルをWakayamaServerのv1/classes/にコピー
@@ -417,4 +440,3 @@ def copy_school_rules_files(source_dir: Path, target_dir: Path) -> Dict[str, int
         result["figures_removed"],
     )
     return result
-

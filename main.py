@@ -29,7 +29,7 @@ from scraper.dormitory_scraper import scrape_dormitory_page
 from scraper.dormitory_calendar_scraper import scrape_dormitory_calendar_page
 from scraper.classes_scraper import scrape_classes_page
 from scraper.pdf_downloader import download_pdf, check_pdf_updated, get_file_hash
-from scraper.image_downloader import check_image_updated, get_file_hash as get_image_hash
+from scraper.image_downloader import download_image, check_image_updated, get_file_hash as get_image_hash
 from processors.classes_processor import process_classes_pdf
 from processors.meals_processor import process_meals_pdf
 from processors.school_rules_processor import process_school_rules
@@ -39,6 +39,7 @@ from server_updater.file_manager import (
     copy_meals_files,
     copy_dormitory_events_files,
     copy_school_rules_files,
+    has_server_target_data,
     load_processed_hashes,
     load_dormitory_events_state,
     merge_and_write_processed_hashes,
@@ -46,6 +47,22 @@ from server_updater.file_manager import (
 )
 from server_updater.git_updater import init_git_repo, commit_and_push
 from notifier.discord import notify_success, notify_error, notify_no_update
+
+
+def model_uses_openrouter(model: str) -> bool:
+    """モデル名から OpenRouter 経由かどうかを判定する。"""
+    return "/" in model
+
+
+def resolve_api_key_for_model(
+    model: str,
+    gemini_api_key: Optional[str],
+    openrouter_api_key: Optional[str],
+) -> str:
+    """モデルに応じて利用する API キーを返す。"""
+    if model_uses_openrouter(model):
+        return openrouter_api_key or ""
+    return gemini_api_key or ""
 
 
 def process_dormitory_meals(
@@ -57,6 +74,7 @@ def process_dormitory_meals(
     discord_webhook: Optional[str] = None,
     prompt_file: Optional[Path] = None,
     processed_hashes: Optional[Set[str]] = None,
+    server_repo_path: Optional[Path] = None,
 ) -> tuple[bool, List[str], bool]:
     """寮食PDFの処理
     
@@ -146,10 +164,16 @@ def process_dormitory_meals(
                 pdf_hash = get_file_hash(temp_path)
                 if pdf_hash:
                     if pdf_hash in processed_hashes:
-                        logger.info(f"{label} のPDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
-                        skipped_processed.append(label)
-                        temp_path.unlink(missing_ok=True)
-                        continue
+                        if server_repo_path and not has_server_target_data(server_repo_path, "meals"):
+                            logger.warning(
+                                "%s のPDFは既処理ハッシュですが、サーバー側の寮食データが見つからないため再生成します。",
+                                label,
+                            )
+                        else:
+                            logger.info(f"{label} のPDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
+                            skipped_processed.append(label)
+                            temp_path.unlink(missing_ok=True)
+                            continue
                     
                     logger.info(f"{label} のPDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
                     # 一時ファイルを正式ファイルに移動
@@ -257,6 +281,7 @@ def process_classes(
     use_yomitoku: bool = False,
     discord_webhook: Optional[str] = None,
     processed_hashes: Optional[Set[str]] = None,
+    server_repo_path: Optional[Path] = None,
 ) -> tuple[bool, Optional[str], bool]:
     """授業PDFの処理
     
@@ -309,11 +334,14 @@ def process_classes(
             pdf_hash = get_file_hash(temp_path)
             if pdf_hash:
                 if pdf_hash in processed_hashes:
-                    logger.info(f"PDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
-                    if discord_webhook:
-                        notify_no_update(discord_webhook, "classes", "PDFは既に処理済みです。")
-                    temp_path.unlink(missing_ok=True)
-                    return True, None, False
+                    if server_repo_path and not has_server_target_data(server_repo_path, "classes"):
+                        logger.warning("授業PDFは既処理ハッシュですが、サーバー側の授業データが見つからないため再生成します。")
+                    else:
+                        logger.info(f"PDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
+                        if discord_webhook:
+                            notify_no_update(discord_webhook, "classes", "PDFは既に処理済みです。")
+                        temp_path.unlink(missing_ok=True)
+                        return True, None, False
                 
                 logger.info(f"PDFをダウンロードしました（ハッシュ: {pdf_hash[:16]}...）。処理を続行します。")
                 # 一時ファイルを正式ファイルに移動
@@ -381,6 +409,7 @@ def process_dormitory_events(
     use_yomitoku: bool = False,
     discord_webhook: Optional[str] = None,
     processed_state: Optional[Dict[str, Optional[str]]] = None,
+    server_repo_path: Optional[Path] = None,
 ) -> tuple[bool, Dict[str, Optional[str]], bool]:
     """寮行事予定画像の処理"""
     logger.info("寮行事予定の処理を開始します")
@@ -433,12 +462,27 @@ def process_dormitory_events(
         print(f"更新結果: updated={updated}, new_hash={new_hash}")
 
         if not updated:
-            logger.info("寮行事予定画像が更新されていません。")
-            state = {"last_url": image_url, "last_hash": new_hash or last_hash}
-            save_state(state)
-            if discord_webhook:
-                notify_no_update(discord_webhook, "dormitory_events", "画像が更新されていません。")
-            return True, state, False
+            should_force_rebuild = bool(
+                server_repo_path and not has_server_target_data(server_repo_path, "dormitory_events")
+            )
+            if should_force_rebuild:
+                logger.warning("寮行事画像は未更新ですが、サーバー側データが見つからないため再生成します。")
+                if not image_path.exists():
+                    if not download_image(image_url, image_path):
+                        error_message = "寮行事画像の再ダウンロードに失敗しました。"
+                        logger.error(error_message)
+                        if discord_webhook:
+                            notify_error(discord_webhook, "dormitory_events", error_message, {"画像URL": image_url})
+                        return False, processed_state, False
+                if new_hash is None:
+                    new_hash = get_image_hash(image_path)
+            else:
+                logger.info("寮行事予定画像が更新されていません。")
+                state = {"last_url": image_url, "last_hash": new_hash or last_hash}
+                save_state(state)
+                if discord_webhook:
+                    notify_no_update(discord_webhook, "dormitory_events", "画像が更新されていません。")
+                return True, state, False
 
         if new_hash is None:
             new_hash = get_image_hash(image_path)
@@ -777,19 +821,25 @@ def main():
         "設定済み" if github_token else "未設定",
     )
 
-    needs_gemini_key = args.process in ["meals", "classes", "dormitory_events", "all"]
+    primary_model_uses_openrouter = model_uses_openrouter(args.model)
+    needs_gemini_key = args.process in ["meals", "classes", "dormitory_events", "all"] and not primary_model_uses_openrouter
     if args.process in ["rules", "all"] and args.rules_provider == "gemini":
         needs_gemini_key = True
+
+    needs_openrouter_key = args.process in ["meals", "classes", "dormitory_events", "all"] and primary_model_uses_openrouter
+    if args.process in ["rules", "all"] and args.rules_provider == "openrouter":
+        needs_openrouter_key = True
 
     if needs_gemini_key and not api_key:
         logger.error("Google APIキーが設定されていません。")
         sys.exit(1)
 
-    if args.process in ["rules", "all"] and args.rules_provider == "openrouter" and not openrouter_api_key:
+    if needs_openrouter_key and not openrouter_api_key:
         logger.error("OpenRouter APIキーが設定されていません。")
         sys.exit(1)
 
     google_api_key = api_key or ""
+    resolved_model_api_key = resolve_api_key_for_model(args.model, api_key, openrouter_api_key)
     
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -838,13 +888,14 @@ def main():
         logger.info("--- 寮食処理を開始 ---")
         meals_ok, collected, meals_did_process = process_dormitory_meals(
             output_dir=output_dir,
-            api_key=google_api_key,
+            api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
             prompt_file=args.prompt_file,
             processed_hashes=meals_processed_hashes,
+            server_repo_path=server_repo_path if args.update_server else None,
         )
         had_any_error |= (not meals_ok)
         meals_collected_hashes = collected
@@ -854,12 +905,13 @@ def main():
         logger.info("--- 寮行事処理を開始 ---")
         events_ok, events_state, events_did_process = process_dormitory_events(
             output_dir=output_dir,
-            api_key=google_api_key,
+            api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
             processed_state=dormitory_events_state,
+            server_repo_path=server_repo_path if args.update_server else None,
         )
         had_any_error |= (not events_ok)
         dormitory_events_state = events_state
@@ -869,12 +921,13 @@ def main():
         logger.info("--- 授業処理を開始 ---")
         classes_ok, collected_hash, classes_did_process = process_classes(
             output_dir=output_dir,
-            api_key=google_api_key,
+            api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
             use_yomitoku=args.use_yomitoku,
             discord_webhook=discord_webhook,
             processed_hashes=classes_processed_hashes,
+            server_repo_path=server_repo_path if args.update_server else None,
         )
         had_any_error |= (not classes_ok)
         classes_collected_hash = collected_hash

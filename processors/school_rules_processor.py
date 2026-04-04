@@ -776,6 +776,7 @@ def process_school_rules(
             existing_summary = existing_meta.get("summary")
 
         pdf_url_changed = existing_pdf_url is None or existing_pdf_url != rule.pdf_url
+        detail_missing = existing_meta is not None and existing_detail is None
         metadata_changed = False
         if existing_detail:
             metadata_changed = (
@@ -785,12 +786,14 @@ def process_school_rules(
                 or existing_detail.get("pdfUrl") != rule.pdf_url
             )
 
-        needs_content_update = pdf_url_changed and bool(rule.pdf_url)
+        needs_content_update = bool(rule.pdf_url) and (pdf_url_changed or detail_missing)
         needs_metadata_update = metadata_changed and existing_detail is not None
 
         updated_detail: Optional[Dict[str, Any]] = None
 
         if needs_content_update:
+            if detail_missing:
+                logger.warning("Existing rule detail is missing; regenerating content: %s", rule.rule_id)
             pdf_path = downloads_dir / f"{rule.rule_id}.pdf"
             temp_path = pdf_path.with_suffix(".tmp")
             if not download_pdf(rule.pdf_url, temp_path):
