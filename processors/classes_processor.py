@@ -21,6 +21,7 @@ JST = datetime.timezone(datetime.timedelta(hours=9))
 
 
 CLASSES_PROMPT = """以下のスキーマで抽出して。
+もし授業が途中で終わる/長く続く場合(例えば140分や50分の授業の場合)は、終了時刻を計算して合わせ、科目名の後ろにも何分の授業かをカッコで記載してください。
 ```
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -29,7 +30,7 @@ CLASSES_PROMPT = """以下のスキーマで抽出して。
   "type": "object",
   "additionalProperties": {
     "type": "object",
-    "description": "学年オブジェクト（例: '1'）（留学生の場合は'1r'のようにrをつける）",
+    "description": "学年オブジェクト（例: '1'）",
     "additionalProperties": {
       "type": "array",
       "description": "クラスの時間割（例: 'B'）",
