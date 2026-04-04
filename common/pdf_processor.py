@@ -152,7 +152,7 @@ class PDFProcessor:
         
         ocr_section = (
             "\n\n[参考資料: このページのOCR 結果 - Markdown]\n"
-            "OCR結果は誤りを含む可能性があります。必要に応じて画像と突き合わせて解釈してください。\n\n"
+            "OCR結果は誤りを含む可能性があります。必要に応じて画像と突き合わせて解釈してください。画像が常に正しいです。\n\n"
             f"{ocr_md_text.strip()}\n\n"
             if ocr_md_text.strip() else ""
         )

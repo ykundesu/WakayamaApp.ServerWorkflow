@@ -17,6 +17,7 @@ from common.pdf_processor import PDFProcessor
 from common.image_utils import render_pdf_pages
 
 logger = logging.getLogger(__name__)
+JST = datetime.timezone(datetime.timedelta(hours=9))
 
 
 CLASSES_PROMPT = """以下のスキーマで抽出して。
@@ -244,11 +245,11 @@ def build_final_outputs(json_dir: Path, out_dir: Path) -> None:
     logger.debug(f"マージ結果: {len(merged)}学年分のデータ")
     
     # 現在の年と月から base_year と value_suffix を決定
-    now = datetime.datetime.now()
-    # 4月を基準に年度を計算
-    base_year = now.year if now.month >= 4 else now.year - 1
-    # 前期（4-9月）= 0, 後期（10-3月）= 1
-    value_suffix = 0 if 4 <= now.month <= 9 else 1
+    now = datetime.datetime.now(JST)
+    # 授業時間割は学期開始より少し早く公開されるため、
+    # JST基準で 2-7月を前期、8-1月を後期として扱う。
+    base_year = now.year if now.month >= 2 else now.year - 1
+    value_suffix = 0 if 2 <= now.month <= 7 else 1
     logger.debug(f"年度情報: base_year={base_year}, value_suffix={value_suffix}")
     
     # 書き出し

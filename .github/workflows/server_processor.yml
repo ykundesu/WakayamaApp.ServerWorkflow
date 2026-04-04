@@ -35,7 +35,7 @@ jobs:
           python -X utf8 main.py \
             --process all \
             --output-dir ./output \
-            --model gemini-3-flash-preview \
+            --model moonshotai/kimi-k2.5 \
             --rules-provider openrouter \
             --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \

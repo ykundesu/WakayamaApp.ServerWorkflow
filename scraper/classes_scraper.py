@@ -8,12 +8,13 @@
 import re
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
 logger = logging.getLogger(__name__)
+JST = timezone(timedelta(hours=9))
 
 
 FULLWIDTH_DIGIT_TRANSLATION = str.maketrans({
@@ -163,12 +164,12 @@ def find_latest_pdf_url(html: str, base_url: str) -> Optional[str]:
         return None
     
     # 現在の年度・学期を計算
-    now = datetime.now()
+    now = datetime.now(JST)
     current_year = now.year
-    # 4月を基準に年度を計算
-    academic_year = current_year if now.month >= 4 else current_year - 1
-    # 前期（4-9月）= 0, 後期（10-3月）= 1
-    current_term = 0 if 4 <= now.month <= 9 else 1
+    # 授業時間割は学期開始より少し早く公開されるため、
+    # JST基準で 2-7月を前期、8-1月を後期として扱う。
+    academic_year = current_year if now.month >= 2 else current_year - 1
+    current_term = 0 if 2 <= now.month <= 7 else 1
     
     # 来期を計算
     next_term = 1 - current_term
