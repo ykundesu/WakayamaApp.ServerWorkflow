@@ -93,6 +93,7 @@ def process_classes_pdf(
     use_yomitoku: bool = False,
     yomitoku_device: str = "cpu",
     yomitoku_config: Optional[Path] = None,
+    openrouter_provider: Optional[Any] = None,
 ) -> bool:
     """
     授業PDFを処理する
@@ -135,6 +136,7 @@ def process_classes_pdf(
             use_yomitoku=use_yomitoku,
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
+            openrouter_provider=openrouter_provider,
         )
         
         # PDFをレンダリング

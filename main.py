@@ -75,6 +75,7 @@ def process_dormitory_meals(
     prompt_file: Optional[Path] = None,
     processed_hashes: Optional[Set[str]] = None,
     server_repo_path: Optional[Path] = None,
+    openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, List[str], bool]:
     """寮食PDFの処理
     
@@ -211,6 +212,7 @@ def process_dormitory_meals(
                 dpi=dpi,
                 use_yomitoku=use_yomitoku,
                 prompt_file=prompt_file,
+                openrouter_provider=openrouter_provider,
             )
             
             if success:
@@ -282,6 +284,7 @@ def process_classes(
     discord_webhook: Optional[str] = None,
     processed_hashes: Optional[Set[str]] = None,
     server_repo_path: Optional[Path] = None,
+    openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, Optional[str], bool]:
     """授業PDFの処理
     
@@ -376,6 +379,7 @@ def process_classes(
             api_key=api_key,
             dpi=dpi,
             use_yomitoku=use_yomitoku,
+            openrouter_provider=openrouter_provider,
         )
         
         if success:
@@ -410,6 +414,7 @@ def process_dormitory_events(
     discord_webhook: Optional[str] = None,
     processed_state: Optional[Dict[str, Optional[str]]] = None,
     server_repo_path: Optional[Path] = None,
+    openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, Dict[str, Optional[str]], bool]:
     """寮行事予定画像の処理"""
     logger.info("寮行事予定の処理を開始します")
@@ -503,6 +508,7 @@ def process_dormitory_events(
             dpi=dpi,
             use_yomitoku=use_yomitoku,
             title_hint=title_hint,
+            openrouter_provider=openrouter_provider,
         )
 
         if not result:
@@ -778,7 +784,13 @@ def main():
         "--openrouter-provider",
         type=str,
         default=None,
-        help="OpenRouter provider filter JSON（例: '{\"order\":[\"anthropic\",\"amazon-bedrock\"],\"allow_fallbacks\":true}'）",
+        help="通常処理用 OpenRouter provider filter JSON（例: '{\"order\":[\"anthropic\",\"amazon-bedrock\"],\"allow_fallbacks\":true}'）",
+    )
+    parser.add_argument(
+        "--rules-openrouter-provider",
+        type=str,
+        default=None,
+        help="学校規則処理用 OpenRouter provider filter JSON（未指定なら環境変数 RULES_OPENROUTER_PROVIDER を使用）",
     )
     parser.add_argument("--dpi", type=int, default=220, help="レンダリングDPI")
     parser.add_argument("--use-yomitoku", action="store_true", help="Yomitoku OCRを使用")
@@ -792,9 +804,6 @@ def main():
     
     args = parser.parse_args()
 
-    if args.openrouter_provider:
-        os.environ["OPENROUTER_PROVIDER"] = args.openrouter_provider
-    
     logger.info(f"処理タイプ: {args.process}")
     rules_models = parse_rules_models(args.rules_model, args.model)
     logger.info(f"使用モデル: {args.model}")
@@ -808,15 +817,17 @@ def main():
     # 環境変数から取得
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
     openrouter_api_key = args.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
-    openrouter_provider = os.getenv("OPENROUTER_PROVIDER")
+    openrouter_provider = args.openrouter_provider or os.getenv("OPENROUTER_PROVIDER")
+    rules_openrouter_provider = args.rules_openrouter_provider or os.getenv("RULES_OPENROUTER_PROVIDER")
     discord_webhook = args.discord_webhook or os.getenv("DISCORD_WEBHOOK_URL")
     github_token = args.github_token or os.getenv("GITHUB_TOKEN")
     
     logger.debug(
-        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, OPENROUTER_PROVIDER=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
+        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, OPENROUTER_PROVIDER=%s, RULES_OPENROUTER_PROVIDER=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
         "設定済み" if api_key else "未設定",
         "設定済み" if openrouter_api_key else "未設定",
         "設定済み" if openrouter_provider else "未設定",
+        "設定済み" if rules_openrouter_provider else "未設定",
         "設定済み" if discord_webhook else "未設定",
         "設定済み" if github_token else "未設定",
     )
@@ -896,6 +907,7 @@ def main():
             prompt_file=args.prompt_file,
             processed_hashes=meals_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
+            openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not meals_ok)
         meals_collected_hashes = collected
@@ -912,6 +924,7 @@ def main():
             discord_webhook=discord_webhook,
             processed_state=dormitory_events_state,
             server_repo_path=server_repo_path if args.update_server else None,
+            openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not events_ok)
         dormitory_events_state = events_state
@@ -928,6 +941,7 @@ def main():
             discord_webhook=discord_webhook,
             processed_hashes=classes_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
+            openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not classes_ok)
         classes_collected_hash = collected_hash
@@ -945,6 +959,7 @@ def main():
             server_repo_path=server_repo_path if args.update_server else None,
             provider=args.rules_provider,
             openrouter_api_key=openrouter_api_key,
+            openrouter_provider=rules_openrouter_provider,
         )
         had_any_error |= (not rules_ok)
         rules_collected_hashes = collected_hashes

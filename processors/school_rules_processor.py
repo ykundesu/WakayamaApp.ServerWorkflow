@@ -323,6 +323,7 @@ class RulesTextCaller:
         model: str,
         gemini_api_key: Optional[str] = None,
         openrouter_api_key: Optional[str] = None,
+        openrouter_provider: Optional[Any] = None,
         temperature: float = 0.2,
     ):
         self.provider = provider
@@ -336,6 +337,8 @@ class RulesTextCaller:
                 api_key=openrouter_api_key,
                 temperature=temperature,
                 schema=RULES_SCHEMA,
+                provider=openrouter_provider,
+                provider_env_var="RULES_OPENROUTER_PROVIDER",
             )
 
     def call(self, prompt: str) -> str:
@@ -696,6 +699,7 @@ def process_school_rules(
     server_repo_path: Optional[Path] = None,
     provider: str = "gemini",
     openrouter_api_key: Optional[str] = None,
+    openrouter_provider: Optional[Any] = None,
 ) -> Tuple[bool, List[str], bool]:
     """Process school rules PDFs that have been updated."""
     logger.info("School rules processing started")
@@ -749,6 +753,7 @@ def process_school_rules(
             model=selected_model,
             gemini_api_key=api_key,
             openrouter_api_key=openrouter_api_key,
+            openrouter_provider=openrouter_provider,
         )
         for selected_model in model_list
     ]

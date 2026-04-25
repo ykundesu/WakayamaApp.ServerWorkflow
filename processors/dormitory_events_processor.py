@@ -230,6 +230,7 @@ def process_dormitory_events_image(
     yomitoku_device: str = "cpu",
     yomitoku_config: Optional[Path] = None,
     title_hint: Optional[str] = None,
+    openrouter_provider: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     logger.info(f"Processing dormitory events image: {image_path}")
     try:
@@ -246,6 +247,7 @@ def process_dormitory_events_image(
             use_yomitoku=use_yomitoku,
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
+            openrouter_provider=openrouter_provider,
         )
 
         prompt_text = DORMITORY_EVENTS_PROMPT

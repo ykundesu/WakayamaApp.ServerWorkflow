@@ -137,6 +137,7 @@ def process_meals_pdf(
     yomitoku_device: str = "cpu",
     yomitoku_config: Optional[Path] = None,
     prompt_file: Optional[Path] = None,  # プロンプトファイル（オプション）
+    openrouter_provider: Optional[Any] = None,
 ) -> bool:
     """
     寮食PDFを処理する
@@ -177,6 +178,7 @@ def process_meals_pdf(
             use_yomitoku=use_yomitoku,
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
+            openrouter_provider=openrouter_provider,
         )
         
         # プロンプトテキストを決定（ファイルから読み込むか、デフォルトを使用）

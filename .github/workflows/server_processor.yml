@@ -42,7 +42,8 @@ jobs:
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \
             --use-yomitoku \
-            --openrouter-provider "provider: { order: ['deepinfra/fp4', 'ncompass', 'novita/fp4'], allow_fallbacks: true}"
+            --openrouter-provider '{"order":["venice/int4","parasail/int4","inceptron/int4","io-net/int4"],"allow_fallbacks":true}' \
+            --rules-openrouter-provider '{"order":["deepinfra/fp4","ncompass","novita/fp4"],"allow_fallbacks":true}'
       
       - name: Upload output artifacts
         if: always()

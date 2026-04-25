@@ -32,6 +32,7 @@ class PDFProcessor:
         use_yomitoku: bool = False,
         yomitoku_device: str = "cpu",
         yomitoku_config: Optional[Path] = None,
+        openrouter_provider: Optional[Any] = None,
     ):
         logger.info(f"PDFProcessorを初期化中: model={model}, dpi={dpi}, temperature={temperature}, use_yomitoku={use_yomitoku}")
         self.model = model
@@ -51,6 +52,7 @@ class PDFProcessor:
                 api_key=api_key,
                 temperature=temperature,
                 schema=schema,
+                provider=openrouter_provider,
             )
         else:
             logger.debug("GeminiCallerを作成中...")

@@ -105,9 +105,10 @@ def _retry_after_from_headers(headers: Mapping[str, str]) -> Optional[float]:
 
 def _normalize_openrouter_provider(
     raw: Optional[Union[str, Mapping[str, Any]]],
+    env_var: Optional[str] = "OPENROUTER_PROVIDER",
 ) -> Optional[Dict[str, Any]]:
-    if raw is None:
-        raw = os.getenv("OPENROUTER_PROVIDER")
+    if raw is None and env_var:
+        raw = os.getenv(env_var)
     if raw is None:
         return None
     if isinstance(raw, Mapping):
@@ -235,6 +236,7 @@ class OpenRouterCaller:
         temperature: float = 0.2,
         schema: Optional[Dict[str, Any]] = None,
         provider: Optional[Union[str, Mapping[str, Any]]] = None,
+        provider_env_var: Optional[str] = "OPENROUTER_PROVIDER",
     ):
         logger.info(f"OpenRouterCallerを初期化中: model={model}, temperature={temperature}")
         if not _requests_available:
@@ -248,7 +250,7 @@ class OpenRouterCaller:
         self.model = model
         self.temperature = temperature
         self.schema = schema
-        self.provider = _normalize_openrouter_provider(provider)
+        self.provider = _normalize_openrouter_provider(provider, provider_env_var)
         self.response_format = self._build_response_format(schema)
         logger.info("OpenRouterCallerの初期化が完了しました")
 
