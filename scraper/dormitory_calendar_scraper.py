@@ -11,6 +11,9 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from common.certificates import configure_wakayama_ca_bundle
+from common.scrape_errors import ScrapeError
+
 logger = logging.getLogger(__name__)
 
 DORMITORY_CALENDAR_URL = "https://www.wakayama-nct.ac.jp/campuslife/dormitory/calendar/"
@@ -84,6 +87,7 @@ def find_calendar_image(html: str, base_url: str) -> Optional[Dict[str, Any]]:
 def scrape_dormitory_calendar_page() -> Optional[Dict[str, Any]]:
     logger.info(f"Scraping dormitory calendar page: {DORMITORY_CALENDAR_URL}")
     try:
+        configure_wakayama_ca_bundle()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -97,6 +101,7 @@ def scrape_dormitory_calendar_page() -> Optional[Dict[str, Any]]:
         return result
     except requests.RequestException as exc:
         logger.error(f"[dormitory_calendar] Request failed: {exc}", exc_info=True)
+        raise ScrapeError(f"寮行事予定ページの取得に失敗しました: {exc}") from exc
     except Exception as exc:
         logger.error(f"[dormitory_calendar] Unexpected error: {exc}", exc_info=True)
-    return None
+        raise ScrapeError(f"寮行事予定ページの処理中に予期しないエラーが発生しました: {exc}") from exc

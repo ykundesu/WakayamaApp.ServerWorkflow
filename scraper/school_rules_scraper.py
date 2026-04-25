@@ -13,6 +13,8 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup, Tag
 
+from common.certificates import configure_wakayama_ca_bundle
+
 logger = logging.getLogger(__name__)
 
 RULES_URL = "https://www.wakayama-nct.ac.jp/about/profile/rules/"
@@ -29,6 +31,7 @@ def normalize_text(text: str) -> str:
 
 def fetch_html(url: str, timeout: float = 15.0, retries: int = 3, backoff: float = 1.5) -> str:
     """Fetch HTML with retries."""
+    configure_wakayama_ca_bundle()
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; WakayamaRulesScraper/1.0)"
     }

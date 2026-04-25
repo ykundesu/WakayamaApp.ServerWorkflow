@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional, Tuple
 from urllib.parse import urljoin, urlparse
 
+from common.certificates import configure_wakayama_ca_bundle
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,7 @@ def download_pdf(url: str, save_path: Path, headers: Optional[dict] = None) -> b
     """
     logger.info(f"PDFダウンロードを開始: {url} -> {save_path}")
     try:
+        configure_wakayama_ca_bundle()
         default_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -96,6 +99,7 @@ def check_pdf_updated(url: str, local_path: Path) -> Tuple[bool, Optional[str]]:
         return True, None
     
     try:
+        configure_wakayama_ca_bundle()
         # リモートのContent-Lengthを取得（簡易チェック）
         logger.debug("リモートファイルのサイズを確認中...")
         response = requests.head(url, timeout=10)
@@ -125,8 +129,8 @@ def check_pdf_updated(url: str, local_path: Path) -> Tuple[bool, Optional[str]]:
                 temp_path.unlink(missing_ok=True)
                 return False, old_hash
         
-        logger.warning("一時ファイルのダウンロードに失敗したため、更新なしと判定")
-        return False, get_file_hash(local_path)
+        logger.warning("一時ファイルのダウンロードに失敗したため、更新ありとして再ダウンロードを試行します")
+        return True, None
     except Exception as e:
         logger.error(f"PDF更新チェックエラー ({url}): {e}", exc_info=True)
         # エラー時は更新ありとみなす

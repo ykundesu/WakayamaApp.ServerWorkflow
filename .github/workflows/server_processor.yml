@@ -23,6 +23,31 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
+
+      - name: Configure Wakayama NCT certificate bundle
+        run: |
+          python - <<'PY'
+          import certifi
+          import os
+          import pathlib
+          import ssl
+          import urllib.request
+
+          urls = [
+              "http://repo1.secomtrust.net/sppca/nii/odca4/nii-odca4g8rsa.cer",
+              "http://repo2.secomtrust.net/root/tlsrsa/tlsrsarootca2024.cer",
+          ]
+          bundle = pathlib.Path("wakayama-ca-bundle.pem").resolve()
+          content = pathlib.Path(certifi.where()).read_text(encoding="utf-8")
+          for url in urls:
+              with urllib.request.urlopen(url, timeout=30) as response:
+                  content += "\n" + ssl.DER_cert_to_PEM_cert(response.read())
+          bundle.write_text(content, encoding="utf-8")
+
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env:
+              print(f"REQUESTS_CA_BUNDLE={bundle}", file=env)
+              print(f"SSL_CERT_FILE={bundle}", file=env)
+          PY
       
       - name: Process PDFs
         env:
@@ -32,19 +57,19 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
         run: |
+          # model: Kimiに決めた！
+          # rules-model: とりあえず安いGPT-OSS-120Bを指定する
+          # openrouter-provider: 安く出力トークンが大きいプロバイダを指定して品質の悪いプロバイダにルーティングされないようにする
           python -X utf8 main.py \
             --process all \
             --output-dir ./output \
-            # Kimiに決めた！
             --model moonshotai/kimi-k2.6 \
             --rules-provider openrouter \
-            # とりあえず安いGPT-OSS-120Bを指定する
             --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \
             --use-yomitoku \
-            # 安く出力トークンが大きいプロバイダを指定して品質の悪いプロバイダにルーティングされないようにする
             --openrouter-provider '{"order":["venice/int4","parasail/int4","inceptron/int4","io-net/int4"],"allow_fallbacks":true}' \
             --rules-openrouter-provider '{"order":["deepinfra/fp4","ncompass","novita/fp4"],"allow_fallbacks":true}'
       
@@ -53,7 +78,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: output
-          path: WakayamaApp.ServerWorkflow/output/
+          path: output/
           retention-days: 7
 
 

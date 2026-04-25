@@ -11,12 +11,15 @@ from typing import Optional, Tuple
 
 import requests
 
+from common.certificates import configure_wakayama_ca_bundle
+
 logger = logging.getLogger(__name__)
 
 
 def download_image(url: str, save_path: Path, headers: Optional[dict] = None) -> bool:
     logger.info(f"Downloading image: {url} -> {save_path}")
     try:
+        configure_wakayama_ca_bundle()
         default_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -90,4 +93,5 @@ def check_image_updated(
         temp_path.unlink(missing_ok=True)
         return False, new_hash or old_hash
 
-    return False, last_hash or get_file_hash(local_path)
+    logger.warning("Image update check failed because the latest image could not be downloaded.")
+    return True, None

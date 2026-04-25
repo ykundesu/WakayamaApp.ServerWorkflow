@@ -465,6 +465,12 @@ def process_dormitory_events(
             last_hash=last_hash,
         )
         print(f"更新結果: updated={updated}, new_hash={new_hash}")
+        if updated and new_hash is None:
+            error_message = "寮行事画像の取得に失敗しました。"
+            logger.error(error_message)
+            if discord_webhook:
+                notify_error(discord_webhook, "dormitory_events", error_message, {"画像URL": image_url})
+            return False, processed_state, False
 
         if not updated:
             should_force_rebuild = bool(

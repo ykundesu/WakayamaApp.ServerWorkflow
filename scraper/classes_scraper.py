@@ -13,6 +13,9 @@ from typing import Optional, List, Dict, Any
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 
+from common.certificates import configure_wakayama_ca_bundle
+from common.scrape_errors import ScrapeError
+
 logger = logging.getLogger(__name__)
 JST = timezone(timedelta(hours=9))
 
@@ -205,6 +208,7 @@ def scrape_classes_page() -> Optional[str]:
     """
     logger.info(f"授業ページをスクレイピング中: {CLASSES_URL}")
     try:
+        configure_wakayama_ca_bundle()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -223,7 +227,10 @@ def scrape_classes_page() -> Optional[str]:
             logger.warning("PDFリンクが見つかりませんでした")
         
         return pdf_url
-    except Exception as e:
+    except requests.RequestException as e:
         logger.error(f"授業ページスクレイピングエラー: {e}", exc_info=True)
-        return None
+        raise ScrapeError(f"授業ページの取得に失敗しました: {e}") from e
+    except Exception as e:
+        logger.error(f"授業ページスクレイピング中の予期しないエラー: {e}", exc_info=True)
+        raise ScrapeError(f"授業ページの処理中に予期しないエラーが発生しました: {e}") from e
 

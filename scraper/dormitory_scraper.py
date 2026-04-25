@@ -14,6 +14,9 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
+from common.certificates import configure_wakayama_ca_bundle
+from common.scrape_errors import ScrapeError
+
 logger = logging.getLogger(__name__)
 
 DORMITORY_URL = "https://www.wakayama-nct.ac.jp/campuslife/dormitory/restaurant/"
@@ -229,6 +232,7 @@ def scrape_dormitory_page() -> List[Dict[str, Any]]:
     """Fetch the dormitory page and return target PDF metadata."""
     logger.info(f"寮食ページをスクレイピング中: {DORMITORY_URL}")
     try:
+        configure_wakayama_ca_bundle()
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -248,7 +252,8 @@ def scrape_dormitory_page() -> List[Dict[str, Any]]:
         return result
     except requests.RequestException as exc:
         logger.error(f"[dormitory] 寮食ページの取得に失敗: {exc}", exc_info=True)
+        raise ScrapeError(f"寮食ページの取得に失敗しました: {exc}") from exc
     except Exception as exc:  # pragma: no cover - safeguard
         logger.error(f"[dormitory] 予期しないエラー: {exc}", exc_info=True)
-    return []
+        raise ScrapeError(f"寮食ページの処理中に予期しないエラーが発生しました: {exc}") from exc
 
