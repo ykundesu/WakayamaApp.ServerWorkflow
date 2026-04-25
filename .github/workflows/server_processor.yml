@@ -35,13 +35,16 @@ jobs:
           python -X utf8 main.py \
             --process all \
             --output-dir ./output \
-            --model moonshotai/kimi-k2.5 \
+            # Kimiに決めた！
+            --model moonshotai/kimi-k2.6 \
             --rules-provider openrouter \
+            # とりあえず安いGPT-OSS-120Bを指定する
             --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \
             --server-repo-url "$SERVER_REPO_URL" \
             --branch main \
             --use-yomitoku \
+            # 安く出力トークンが大きいプロバイダを指定して品質の悪いプロバイダにルーティングされないようにする
             --openrouter-provider '{"order":["venice/int4","parasail/int4","inceptron/int4","io-net/int4"],"allow_fallbacks":true}' \
             --rules-openrouter-provider '{"order":["deepinfra/fp4","ncompass","novita/fp4"],"allow_fallbacks":true}'
       
