@@ -20,67 +20,73 @@ logger = logging.getLogger(__name__)
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
 
-CLASSES_PROMPT = """以下のスキーマで抽出して。
-もし授業が途中で終わる/長く続く場合(例えば140分や50分の授業の場合)は、終了時刻を計算して合わせ、科目名の後ろにも何分の授業かをカッコで記載してください。
-```
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/schemas/timetable.schema.json",
-  "title": "Timetable",
-  "type": "object",
-  "additionalProperties": {
+CLASSES_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://example.com/schemas/timetable.schema.json",
+    "title": "Timetable",
     "type": "object",
-    "description": "学年オブジェクト（例: '1'）",
     "additionalProperties": {
-      "type": "array",
-      "description": "クラスの時間割（例: 'B'）",
-      "items": {
         "type": "object",
-        "required": ["day", "classes"],
-        "properties": {
-          "day": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 6,
-            "description": "0=月, 1=火, 2=水, 3=木, 4=金, 5=土, 6=日（通常は0〜4）"
-          },
-          "classes": {
+        "description": "学年オブジェクト（例: '1'）",
+        "additionalProperties": {
             "type": "array",
-            "minItems": 1,
+            "description": "クラスの時間割（例: 'B'）",
             "items": {
-              "type": "object",
-              "required": ["start", "end", "name"],
-              "properties": {
-                "start": {
-                  "type": "string",
-                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-                  "description": "開始時刻 (HH:MM)"
+                "type": "object",
+                "required": ["day", "classes"],
+                "properties": {
+                    "day": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 6,
+                        "description": "0=月, 1=火, 2=水, 3=木, 4=金, 5=土, 6=日（通常は0〜4）",
+                    },
+                    "classes": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                            "type": "object",
+                            "required": ["start", "end", "name"],
+                            "properties": {
+                                "start": {
+                                    "type": "string",
+                                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                                    "description": "開始時刻 (HH:MM)",
+                                },
+                                "end": {
+                                    "type": "string",
+                                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                                    "description": "終了時刻 (HH:MM)",
+                                },
+                                "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "description": "科目名",
+                                },
+                                "teacher": {
+                                    "type": ["string", "null"],
+                                    "description": "教員名（未定ならnull可）",
+                                },
+                            },
+                            "additionalProperties": False,
+                        },
+                    },
                 },
-                "end": {
-                  "type": "string",
-                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-                  "description": "終了時刻 (HH:MM)"
-                },
-                "name": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "科目名"
-                },
-                "teacher": {
-                  "type": ["string", "null"],
-                  "description": "教員名（未定ならnull可）"
-                }
-              },
-              "additionalProperties": false
-            }
-          }
+                "additionalProperties": False,
+            },
         },
-        "additionalProperties": false
-      }
-    }
-  }
+    },
 }
-```"""
+
+CLASSES_PROMPT = (
+    "以下のJSON Schemaで抽出して。\n"
+    "もし授業が途中で終わる/長く続く場合(例えば140分や50分の授業の場合)は、終了時刻を計算して合わせ、"
+    "科目名の後ろにも何分の授業かをカッコで記載してください。\n"
+    "JSONオブジェクトのみを返してください。\n"
+    "```json\n"
+    f"{json.dumps(CLASSES_SCHEMA, ensure_ascii=False, indent=2)}\n"
+    "```"
+)
 
 
 def process_classes_pdf(
@@ -130,7 +136,7 @@ def process_classes_pdf(
         processor = PDFProcessor(
             model=model,
             api_key=api_key,
-            schema=None,  # スキーマはプロンプトに含める
+            schema=CLASSES_SCHEMA,
             dpi=dpi,
             temperature=temperature,
             use_yomitoku=use_yomitoku,
@@ -146,6 +152,7 @@ def process_classes_pdf(
         
         # 各ページを処理
         logger.info(f"各ページの処理を開始: 総ページ数={len(pages)}")
+        had_page_error = False
         for idx, im in enumerate(pages, start=1):
             # 画像バリアント作成と保存
             from common.image_utils import crop_top_bottom
@@ -174,6 +181,9 @@ def process_classes_pdf(
                     call_mode="none",
                     merge_strategy="deep",
                 )
+
+                if result_json is None:
+                    raise ValueError("ページ処理結果が空でした")
                 
                 # JSON保存
                 page_json_path = json_dir / f"{label}.json"
@@ -187,9 +197,13 @@ def process_classes_pdf(
                 with open(error_file, "w", encoding="utf-8") as f:
                     f.write(err_txt)
                 logger.error(f"  -> ERROR: {e}", exc_info=True)
+                had_page_error = True
                 continue
         
         logger.info("全ページ処理完了")
+        if had_page_error:
+            logger.error("一部ページの授業PDF処理に失敗しました。")
+            return False
         
         # final/ 出力
         logger.info("final/ への書き出しを開始...")
@@ -233,8 +247,14 @@ def build_final_outputs(json_dir: Path, out_dir: Path) -> None:
         
         # obj は { "1": { "B": [ ... ] , ... }, "2": { ... } } の想定
         # または {"page": 1, "result": {...}} の形式
+        if not isinstance(obj, dict):
+            logger.warning(f"JSONファイルの内容がオブジェクトではないためスキップ: {fname}")
+            continue
         if "result" in obj:
             obj = obj["result"]
+        if not isinstance(obj, dict):
+            logger.warning(f"result の内容がオブジェクトではないためスキップ: {fname}")
+            continue
         
         for grade_str, class_map in obj.items():
             if not isinstance(class_map, dict):

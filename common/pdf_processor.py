@@ -7,6 +7,7 @@ PDF→画像変換、ページ分割、API呼び出しの統合処理
 
 import os
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
@@ -162,78 +163,99 @@ class PDFProcessor:
         full_prompt = prefix + "\n\n" + prompt.strip() + ocr_section
         logger.debug(f"プロンプト構築完了: 総長={len(full_prompt)}文字")
         
-        # API呼び出し
-        logger.info(f"ページ {page_num} のAPI呼び出しを開始 (call_mode={call_mode})")
-        if call_mode == "single":
-            if self.use_openrouter:
-                logger.debug("OpenRouter singleモードで呼び出し中...")
-                resp = self.caller.call_multimodal(full_prompt, {"full": variants["full"], "left": variants["left"], "right": variants["right"]})
-                text = resp["choices"][0]["message"]["content"]
-                if isinstance(text, list):
-                    text = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text])
-                result_json = extract_json_from_text(text)
-            else:
+        def _content_to_text(content: Any) -> str:
+            if isinstance(content, list):
+                return "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
+            return str(content)
+
+        def _call_openrouter(prompt_text: str, image_variants: Dict[str, Image.Image], label: str) -> JsonType:
+            resp = self.caller.call_multimodal(prompt_text, image_variants)
+            text = _content_to_text(resp["choices"][0]["message"]["content"])
+            result = extract_json_from_text(text)
+            if result is None:
+                raise ValueError(f"{label} の応答からJSONを抽出できませんでした")
+            return result
+
+        def _call_once() -> JsonType:
+            if call_mode == "single":
+                if self.use_openrouter:
+                    logger.debug("OpenRouter singleモードで呼び出し中...")
+                    return _call_openrouter(
+                        full_prompt,
+                        {"full": variants["full"], "left": variants["left"], "right": variants["right"]},
+                        "single",
+                    )
                 logger.debug("Gemini singleモードで呼び出し中...")
-                result_json = self.caller.generate(full_prompt, [variants["left"], variants["right"], variants["full"]])
-        elif call_mode == "none":
-            if self.use_openrouter:
-                logger.debug("OpenRouter noneモードで呼び出し中...")
-                resp = self.caller.call_multimodal(full_prompt, {"full": variants["full"]})
-                text = resp["choices"][0]["message"]["content"]
-                if isinstance(text, list):
-                    text = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text])
-                result_json = extract_json_from_text(text)
-            else:
+                return self.caller.generate(full_prompt, [variants["left"], variants["right"], variants["full"]])
+
+            if call_mode == "none":
+                if self.use_openrouter:
+                    logger.debug("OpenRouter noneモードで呼び出し中...")
+                    return _call_openrouter(full_prompt, {"full": variants["full"]}, "none")
                 logger.debug("Gemini noneモードで呼び出し中...")
-                result_json = self.caller.generate(full_prompt, [variants["full"]])
-        else:  # triple
+                return self.caller.generate(full_prompt, [variants["full"]])
+
             logger.debug("tripleモードで複数回呼び出し中...")
             if self.use_openrouter:
                 logger.debug("元画像を処理中...")
-                res_original = self.caller.call_multimodal(full_prompt + "\n\n(この入力は: 元画像)", {"full": variants["full"]})
-                text_orig = res_original["choices"][0]["message"]["content"]
-                if isinstance(text_orig, list):
-                    text_orig = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text_orig])
-                res_original_json = extract_json_from_text(text_orig)
-                
+                res_original_json = _call_openrouter(
+                    full_prompt + "\n\n(この入力は: 元画像)", {"full": variants["full"]}, "元画像"
+                )
+
                 logger.debug("左半分を処理中...")
-                res_left = self.caller.call_multimodal(full_prompt + "\n\n(この入力は: 左半分)", {"left": variants["left"]})
-                text_left = res_left["choices"][0]["message"]["content"]
-                if isinstance(text_left, list):
-                    text_left = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text_left])
-                res_left_json = extract_json_from_text(text_left)
-                
+                res_left_json = _call_openrouter(
+                    full_prompt + "\n\n(この入力は: 左半分)", {"left": variants["left"]}, "左半分"
+                )
+
                 logger.debug("右半分を処理中...")
-                res_right = self.caller.call_multimodal(full_prompt + "\n\n(この入力は: 右半分)", {"right": variants["right"]})
-                text_right = res_right["choices"][0]["message"]["content"]
-                if isinstance(text_right, list):
-                    text_right = "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in text_right])
-                res_right_json = extract_json_from_text(text_right)
-                
+                res_right_json = _call_openrouter(
+                    full_prompt + "\n\n(この入力は: 右半分)", {"right": variants["right"]}, "右半分"
+                )
+
                 if merge_strategy == "bundle":
-                    result_json = {"page": page_num, "original": res_original_json, "left": res_left_json, "right": res_right_json}
-                else:
-                    logger.debug("deepマージを実行中...")
-                    merged = res_original_json
-                    merged = deep_merge(merged, res_left_json)
-                    merged = deep_merge(merged, res_right_json)
-                    result_json = {"page": page_num, "result": merged}
-            else:
-                logger.debug("元画像を処理中...")
-                res_original = self.caller.generate(full_prompt + "\n\n(この入力は: 元画像)", [variants["full"]])
-                logger.debug("左半分を処理中...")
-                res_left = self.caller.generate(full_prompt + "\n\n(この入力は: 左半分)", [variants["left"]])
-                logger.debug("右半分を処理中...")
-                res_right = self.caller.generate(full_prompt + "\n\n(この入力は: 右半分)", [variants["right"]])
-                
-                if merge_strategy == "bundle":
-                    result_json = {"page": page_num, "original": res_original, "left": res_left, "right": res_right}
-                else:
-                    logger.debug("deepマージを実行中...")
-                    merged = res_original
-                    merged = deep_merge(merged, res_left)
-                    merged = deep_merge(merged, res_right)
-                    result_json = {"page": page_num, "result": merged}
+                    return {"page": page_num, "original": res_original_json, "left": res_left_json, "right": res_right_json}
+
+                logger.debug("deepマージを実行中...")
+                merged = res_original_json
+                merged = deep_merge(merged, res_left_json)
+                merged = deep_merge(merged, res_right_json)
+                return {"page": page_num, "result": merged}
+
+            logger.debug("元画像を処理中...")
+            res_original = self.caller.generate(full_prompt + "\n\n(この入力は: 元画像)", [variants["full"]])
+            logger.debug("左半分を処理中...")
+            res_left = self.caller.generate(full_prompt + "\n\n(この入力は: 左半分)", [variants["left"]])
+            logger.debug("右半分を処理中...")
+            res_right = self.caller.generate(full_prompt + "\n\n(この入力は: 右半分)", [variants["right"]])
+
+            if merge_strategy == "bundle":
+                return {"page": page_num, "original": res_original, "left": res_left, "right": res_right}
+
+            logger.debug("deepマージを実行中...")
+            merged = res_original
+            merged = deep_merge(merged, res_left)
+            merged = deep_merge(merged, res_right)
+            return {"page": page_num, "result": merged}
+
+        # API呼び出し
+        logger.info(f"ページ {page_num} のAPI呼び出しを開始 (call_mode={call_mode})")
+        last_error: Optional[Exception] = None
+        result_json: JsonType = None
+        for attempt in range(1, 4):
+            try:
+                if attempt > 1:
+                    logger.info(f"ページ {page_num} のAPI呼び出しを再試行します ({attempt}/3)")
+                result_json = _call_once()
+                if result_json is None:
+                    raise ValueError("応答からJSONを抽出できませんでした")
+                break
+            except Exception as e:
+                last_error = e
+                if attempt >= 3:
+                    logger.error(f"ページ {page_num} のAPI呼び出し/JSON抽出に3回失敗しました: {e}")
+                    raise
+                logger.warning(f"ページ {page_num} のAPI呼び出し/JSON抽出に失敗しました ({attempt}/3): {e}")
+                time.sleep(min(2 ** attempt, 8))
         
         logger.info(f"ページ {page_num} の処理が完了しました")
         return result_json

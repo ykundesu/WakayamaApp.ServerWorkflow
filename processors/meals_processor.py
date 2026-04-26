@@ -20,89 +20,99 @@ from common.menu_converter import convert_daily_to_all
 logger = logging.getLogger(__name__)
 
 
-MEALS_PROMPT = """献立の画像を添付してあります。以下のスキーマの形で画像に含まれている一週間の献立を抜き出してください。
-上から順に、朝昼晩の食事です。
-もしBやカレーなどが空欄の場合は、そのタイプのメニューは存在しないということです。(休日や祝日の場合に一部メニューが存在しない場合があります。)その場合は、存在するメニューのみを含めてください。
-また、「共通」に含まれているものは対象のメニューの全てのsubsに含めてください。例えば、共通に味噌汁とライスが指定されている場合、AとBのどちらものsubsに味噌汁,ライスと出力する必要があります。
-ただし、朝の場合は朝の中で一番上に記載されているメニューをA/B共にmainとしてください。ライス/パンなどは、それぞれAとBに振り分けて。
-また、昼ごはんもしくは晩ごはんで特殊なメニューの場合、A/Bの区別がない場合があります。その場合は、Aのみに振り分けてください。
-```{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/menu.schema.json",
-  "title": "Daily Menus",
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "menus": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/MenuDay" }
-    }
-  },
-  "required": ["menus"],
-  "$defs": {
-    "Nutritional": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "E": { "type": "number", "minimum": 0, "description": "kcal など" },
-        "P": { "type": "number", "minimum": 0 },
-        "F": { "type": "number", "minimum": 0 },
-        "Ca": { "type": "number", "minimum": 0 },
-        "S": { "type": "number", "minimum": 0 }
-      },
-      "required": ["E", "P", "F", "Ca", "S"]
+MEALS_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://example.com/menu.schema.json",
+    "title": "Daily Menus",
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "menus": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"$ref": "#/$defs/MenuDay"},
+        },
     },
-    "MenuItem": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "type": { "type": "string" },
-        "main": { "type": "string" },
-        "subs": {
-          "type": "array",
-          "items": { "type": "string" }
+    "required": ["menus"],
+    "$defs": {
+        "Nutritional": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "E": {"type": "number", "minimum": 0, "description": "kcal など"},
+                "P": {"type": "number", "minimum": 0},
+                "F": {"type": "number", "minimum": 0},
+                "Ca": {"type": "number", "minimum": 0},
+                "S": {"type": "number", "minimum": 0},
+            },
+            "required": ["E", "P", "F", "Ca", "S"],
         },
-        "isRice": { "type": "boolean" },
-        "isCurry": { "type": "boolean" },
-        "nutritional": { "$ref": "#/$defs/Nutritional" }
-      },
-      "required": ["type", "main", "subs", "isRice", "isCurry", "nutritional"]
+        "MenuItem": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "type": {"type": "string"},
+                "main": {"type": "string"},
+                "subs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "isRice": {"type": "boolean"},
+                "isCurry": {"type": "boolean"},
+                "nutritional": {"$ref": "#/$defs/Nutritional"},
+            },
+            "required": ["type", "main", "subs", "isRice", "isCurry", "nutritional"],
+        },
+        "Meal": {
+            "type": "array",
+            "items": {"$ref": "#/$defs/MenuItem"},
+        },
+        "MenuDay": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "day": {
+                    "type": "string",
+                    "pattern": "^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$",
+                    "description": "MM/DD",
+                },
+                "breakfast": {
+                    "type": ["array", "null"],
+                    "items": {"$ref": "#/$defs/MenuItem"},
+                    "description": "nullable",
+                },
+                "lunch": {
+                    "type": ["array", "null"],
+                    "items": {"$ref": "#/$defs/MenuItem"},
+                    "description": "nullable",
+                },
+                "dinner": {
+                    "type": ["array", "null"],
+                    "items": {"$ref": "#/$defs/MenuItem"},
+                    "description": "nullable",
+                },
+            },
+            "required": ["day"],
+        },
     },
-    "Meal": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/MenuItem" }
-    },
-    "MenuDay": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "day": {
-          "type": "string",
-          "pattern": "^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$",
-          "description": "MM/DD"
-        },
-        "breakfast": {
-          "type": ["array", "null"],
-          "items": { "$ref": "#/$defs/MenuItem" },
-          "description": "nullable"
-        },
-        "lunch": {
-          "type": ["array", "null"],
-          "items": { "$ref": "#/$defs/MenuItem" },
-          "description": "nullable"
-        },
-        "dinner": {
-          "type": ["array", "null"],
-          "items": { "$ref": "#/$defs/MenuItem" },
-          "description": "nullable"
-        }
-      },
-      "required": ["day"]
-    }
-  }
-}```
-提供されている全ての日時のbreakfast, lunch, dinnerのデータを抽出してください。"""
+}
+
+MEALS_PROMPT = (
+    "献立の画像を添付してあります。以下のJSON Schemaの形で画像に含まれている一週間の献立を抜き出してください。\n"
+    "上から順に、朝昼晩の食事です。\n"
+    "もしBやカレーなどが空欄の場合は、そのタイプのメニューは存在しないということです。"
+    "(休日や祝日の場合に一部メニューが存在しない場合があります。)その場合は、存在するメニューのみを含めてください。\n"
+    "また、「共通」に含まれているものは対象のメニューの全てのsubsに含めてください。"
+    "例えば、共通に味噌汁とライスが指定されている場合、AとBのどちらものsubsに味噌汁,ライスと出力する必要があります。\n"
+    "ただし、朝の場合は朝の中で一番上に記載されているメニューをA/B共にmainとしてください。"
+    "ライス/パンなどは、それぞれAとBに振り分けて。\n"
+    "また、昼ごはんもしくは晩ごはんで特殊なメニューの場合、A/Bの区別がない場合があります。その場合は、Aのみに振り分けてください。\n"
+    "提供されている全ての日時のbreakfast, lunch, dinnerのデータを抽出してください。\n"
+    "JSONオブジェクトのみを返してください。\n"
+    "```json\n"
+    f"{json.dumps(MEALS_SCHEMA, ensure_ascii=False, indent=2)}\n"
+    "```"
+)
 
 
 def get_monday_date(date_str: str) -> str:
@@ -172,7 +182,7 @@ def process_meals_pdf(
         processor = PDFProcessor(
             model=model,
             api_key=api_key,
-            schema=None,  # スキーマはプロンプトに含める
+            schema=MEALS_SCHEMA,
             dpi=dpi,
             temperature=temperature,
             use_yomitoku=use_yomitoku,
@@ -197,6 +207,7 @@ def process_meals_pdf(
         
         # 各ページを処理
         all_menus = []
+        had_page_error = False
         logger.info(f"各ページの処理を開始: 総ページ数={len(pages)}")
         for idx, im in enumerate(pages, start=1):
             label = f"page_{idx:04d}"
@@ -211,6 +222,9 @@ def process_meals_pdf(
                     call_mode="none",  # RyosokuProcess-Yomitokuの方式: full画像のみ
                     merge_strategy="deep",
                 )
+
+                if result_json is None:
+                    raise ValueError("ページ処理結果が空でした")
                 
                 # 結果からmenusを抽出
                 if isinstance(result_json, dict) and "result" in result_json:
@@ -231,9 +245,13 @@ def process_meals_pdf(
                 
             except Exception as e:
                 logger.error(f"  -> ERROR: {e}", exc_info=True)
+                had_page_error = True
                 continue
         
         logger.info(f"全ページ処理完了: 合計{len(all_menus)}件のメニューを抽出")
+        if had_page_error:
+            logger.error("一部ページの寮食PDF処理に失敗しました。")
+            return False
         
         # 週ごとに分割
         if all_menus:

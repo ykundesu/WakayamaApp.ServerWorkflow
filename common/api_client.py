@@ -267,6 +267,22 @@ class OpenRouterCaller:
             },
         }
 
+    @staticmethod
+    def _ensure_response_healing_plugin(body: Dict[str, Any]) -> None:
+        response_format = body.get("response_format")
+        if not isinstance(response_format, dict):
+            return
+        if response_format.get("type") not in {"json_schema", "json_object"}:
+            return
+
+        plugins = body.setdefault("plugins", [])
+        if not isinstance(plugins, list):
+            logger.warning("OpenRouter plugins must be a list; response-healing plugin was not added")
+            return
+        if any(isinstance(plugin, dict) and plugin.get("id") == "response-healing" for plugin in plugins):
+            return
+        plugins.append({"id": "response-healing"})
+
     def call_multimodal(self, prompt_text: str, images: Dict[str, Image.Image],
                        extra_headers: Optional[Dict[str, str]] = None,
                        extra_body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -312,6 +328,7 @@ class OpenRouterCaller:
             body.update(extra_body)
         if self.response_format and "response_format" not in body:
             body["response_format"] = self.response_format
+        self._ensure_response_healing_plugin(body)
 
         def _redact_body_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
