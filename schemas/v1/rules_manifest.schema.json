@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/rules_manifest.schema.json",
+  "title": "School Rules Manifest (v1)",
+  "description": "v1/school-rules/manifest.json の構造。バッチ実行の追跡用。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version", "generatedAt", "rulesTotal", "rulesUpdated",
+    "rulesRegenerated", "rulesFailed", "rulesUrl", "provider", "model", "models"
+  ],
+  "properties": {
+    "version": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z$"},
+    "generatedAt": {"type": "string", "format": "date-time"},
+    "rulesTotal": {"type": "integer", "minimum": 0},
+    "rulesUpdated": {"type": "integer", "minimum": 0},
+    "rulesRegenerated": {"type": "integer", "minimum": 0},
+    "rulesFailed": {"type": "integer", "minimum": 0},
+    "updatedRuleIds": {"type": "array", "items": {"type": "string"}},
+    "regeneratedRuleIds": {"type": "array", "items": {"type": "string"}},
+    "failedRuleIds": {"type": "array", "items": {"type": "string"}},
+    "removedRuleIds": {"type": "array", "items": {"type": "string"}},
+    "rulesUrl": {"type": "string", "format": "uri", "description": "ルール一覧ページの URL（出典）。"},
+    "provider": {"type": "string", "enum": ["gemini", "openrouter"]},
+    "model": {"type": "string", "description": "実際に最初に試行されたモデル名。"},
+    "models": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "フォールバック候補も含めた指定モデル一覧（指定順）。"
+    }
+  }
+}

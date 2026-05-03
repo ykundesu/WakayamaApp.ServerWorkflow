@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-寮食PDF処理
-献立PDFを処理して週ごとのJSONに分割してmeals/ディレクトリに出力
+"""寮食 PDF → 週次 JSON への変換パイプライン。
+
+入力:
+    - 寮食ページから取得した献立 PDF
+    - LLM (Gemini / OpenRouter) と画像化の DPI 設定
+
+出力:
+    - ``{out_dir}/{label}/meals/{YYYY-MM-DD}.json``
+      （週の月曜日付。最終配置先は ``v1/meals/{YYYY-MM-DD}.json``）
+    - スキーマ: ``MEALS_SCHEMA`` および ``schemas/v1/meals.schema.json``
+
+処理の流れ:
+    1. PDF を ``render_pdf_pages`` で画像化（DPI は呼び出し側設定）
+    2. ``PDFProcessor`` がページごとに LLM へ画像 + プロンプトを投げる
+    3. 返ってきた ``{"menus": [...]}`` を ``menu_converter`` で「共通」欄展開等の
+       後処理をかけ、日付ごとに集約
+    4. 月曜日基準で週ごとに ``MenuDay[]`` を切り出して 1 ファイルずつ出力
+
+注意点（仕様メモ）:
+    - ``MenuDay.day`` は ``MM/DD`` 形式で年情報を持たない。年はファイル名
+      （週月曜日の ``YYYY-MM-DD``）から復元する設計。v2 で ISO8601 化予定。
+    - ``isRice`` / ``isCurry`` はアプリ側のアイコン分岐用フラグ。命名が
+      camelCase なのは v1 互換のための既知の不整合。
+    - 朝食では PDF の最上段に書かれているメニュー（米 or パン）を A/B 双方の
+      ``main`` に複製する仕様（プロンプト内で LLM に指示）。
 """
 
 import os

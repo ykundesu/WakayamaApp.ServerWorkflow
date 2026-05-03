@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-メインエントリーポイント
-スクレイピング→処理→更新→通知の一連の流れを実行
+"""WakayamaApp.ServerWorkflow のエントリポイント。
+
+このスクリプトは GitHub Actions 上で 1 日 1 回 cron 実行される（ローカル CLI でも
+動かせる）。実行フローは大きく 5 段:
+
+    1. ``scraper/`` で公式サイトをパースし PDF / 画像 URL を収集
+    2. PDF / 画像をローカルに DL し、SHA-256 ハッシュで既処理判定
+    3. ``processors/`` で LLM (Gemini / OpenRouter) を呼び出して JSON 化
+    4. ``server_updater/`` で WakayamaServer リポジトリへ反映 (git push)
+    5. ``notifier/discord.py`` で結果を Discord Webhook に通知
+
+このファイルは現状 1000 行超の 'fat main' であり、4 リソース (meals / classes /
+dormitory_events / school_rules) ぶんの処理関数が並んでいる。``DL → ハッシュ判定
+→ processor 呼び出し → 通知`` のパターンが各リソースで重複している。改善ロード
+マップ (docs/architecture.md) では ``ResourcePipeline`` 抽象による共通化を計画。
+
+CLI 仕様の概要は ``--help`` または README 参照。詳細仕様は ``docs/architecture.md``
+および ``docs/output_schema.md`` を参照のこと。
+
+副作用:
+    - 標準出力 (logging) への大量出力
+    - ``output/`` 配下へのファイル書き込み
+    - ``--update-server`` 指定時は WakayamaServer リポへの clone / commit / push
+    - ``--discord-webhook`` 指定時は Discord への HTTP POST
+    - LLM API 呼び出し（課金あり）
 """
 
 import json
@@ -14,10 +36,15 @@ from pathlib import Path
 from typing import Optional, List, Dict, Set, Union
 from urllib.parse import urlparse
 
-# パスを追加
+# このスクリプトを ``python main.py`` で直接起動した場合にも、サブパッケージを
+# パッケージ名（scraper, processors, ...) で import できるようにするため、自身の
+# 親ディレクトリを sys.path の先頭に挿入している。GitHub Actions / venv のどちらの
+# 経路でも安定して動くようにするための保険。
 sys.path.insert(0, str(Path(__file__).parent))
 
-# ログ設定
+# 全モジュール共通のログフォーマット。``logger.info`` を主に使い、デバッグ詳細は
+# ``logger.debug`` を使う前提。``logging.basicConfig`` を呼ぶのはこのプロセス内で
+# 1 度だけで、子ロガー (``logging.getLogger(__name__)``) はこの設定を継承する。
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -50,7 +77,16 @@ from notifier.discord import notify_success, notify_error, notify_no_update
 
 
 def model_uses_openrouter(model: str) -> bool:
-    """モデル名から OpenRouter 経由かどうかを判定する。"""
+    """モデル名から OpenRouter 経由か Gemini 直叩きかを判別する。
+
+    判別ルールは「モデル名に ``/`` を含むか」のみ。OpenRouter のモデル名は
+    必ず ``vendor/model`` 形式 (例: ``moonshotai/kimi-k2.6``) であるのに対し、
+    google-genai のモデル名は ``gemini-2.5-pro`` のような単一トークンしか
+    取らないため、この単純判定で十分機能している。
+
+    将来 OpenRouter 以外のプロバイダ (``anthropic://...`` など) を追加する
+    場合は、ここを Protocol ベースの ``LLMCaller`` ファクトリに置き換える。
+    """
     return "/" in model
 
 
@@ -59,7 +95,12 @@ def resolve_api_key_for_model(
     gemini_api_key: Optional[str],
     openrouter_api_key: Optional[str],
 ) -> str:
-    """モデルに応じて利用する API キーを返す。"""
+    """モデル名に応じて適切な API キーを返す（無ければ空文字列）。
+
+    main() ではローカルでも CI でも、Gemini と OpenRouter のキーを両方
+    環境変数から拾っておき、リソースごとに利用するモデルに応じてここで
+    どちらかを選択する。
+    """
     if model_uses_openrouter(model):
         return openrouter_api_key or ""
     return gemini_api_key or ""
@@ -423,7 +464,7 @@ def process_dormitory_events(
 
     last_url = processed_state.get("last_url")
     last_hash = processed_state.get("last_hash")
-    print(f"前回の状態: last_url={last_url}, last_hash={last_hash}")
+    logger.debug("前回の状態: last_url=%s, last_hash=%s", last_url, last_hash)
 
     def save_state(state: Dict[str, Optional[str]]) -> None:
         if not state.get("last_url"):
@@ -464,7 +505,7 @@ def process_dormitory_events(
             last_url=last_url,
             last_hash=last_hash,
         )
-        print(f"更新結果: updated={updated}, new_hash={new_hash}")
+        logger.debug("更新結果: updated=%s, new_hash=%s", updated, new_hash)
         if updated and new_hash is None:
             error_message = "寮行事画像の取得に失敗しました。"
             logger.error(error_message)
@@ -497,7 +538,7 @@ def process_dormitory_events(
 
         if new_hash is None:
             new_hash = get_image_hash(image_path)
-            print("再計算したハッシュ:", new_hash)
+            logger.debug("再計算したハッシュ: %s", new_hash)
         if new_hash is None:
             error_message = "画像のダウンロードまたはハッシュ計算に失敗しました。"
             logger.error(error_message)

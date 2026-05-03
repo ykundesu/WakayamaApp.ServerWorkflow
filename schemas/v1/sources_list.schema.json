@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/sources_list.schema.json",
+  "title": "Sources processed-hash list (v1)",
+  "description": "v1/sources/list/{target}.json の構造。target は meals / classes / school_rules / dormitory_events のいずれか。dormitory_events のみ別形式（last_url / last_hash）を持つ。冪等性チェックに使われる。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["processed"],
+      "description": "meals / classes / school_rules 用。",
+      "properties": {
+        "processed": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "description": "処理済み PDF/画像の SHA-256 ハッシュ（小文字 hex）。重複なし、ソート済み。"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["last_url", "last_hash"],
+      "description": "dormitory_events 用。月次に上書きされる行事画像なので、最終 URL と最終ハッシュだけ保持する。",
+      "properties": {
+        "last_url": {"anyOf": [{"type": "string", "format": "uri"}, {"type": "null"}]},
+        "last_hash": {"anyOf": [{"type": "string", "pattern": "^[0-9a-f]{64}$"}, {"type": "null"}]}
+      }
+    }
+  ]
+}

@@ -1,8 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-PDFダウンローダー
-PDFリンクからPDFをダウンロードし、更新チェックを行う
+"""PDF ダウンローダー + 更新チェック。
+
+公開 API:
+    - ``download_pdf(url, save_path, headers=None) -> bool``
+        PDF を取得して save_path に書き出す。Content-Type または PDF マジック
+        ナンバー (``%PDF``) で「本当に PDF か」を検証してから保存する。
+    - ``get_file_hash(file_path) -> Optional[str]``
+        SHA-256 (hex) を返す。冪等性チェックのキーとして利用される。
+    - ``check_pdf_updated(url, local_path) -> (updated, new_hash)``
+        ローカルの PDF と URL 先を比較。HEAD で Content-Length を確認したうえで、
+        違うなら一時 DL してハッシュ比較。**エラー時は安全側に倒して
+        「更新あり (updated=True, new_hash=None)」を返す** ため、呼び出し側で
+        new_hash の null チェックが必要。
+    - ``resolve_url(base, link) -> str``
+        相対 URL の解決。
+
+仕様メモ:
+    - SSL 検証用に ``configure_wakayama_ca_bundle()`` を毎回呼ぶ。
+      必要 CA を含むバンドルを動的に構築し ``REQUESTS_CA_BUNDLE`` 環境変数を
+      設定するため、初回のみ重く 2 回目以降は no-op に近い。
+    - User-Agent はサイト側のロボット拒否を避けるためデスクトップブラウザを偽装。
 """
 
 import os

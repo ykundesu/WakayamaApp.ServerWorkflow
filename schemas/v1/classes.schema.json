@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/classes.schema.json",
+  "title": "Timetable (v1)",
+  "description": "週間時間割。ファイルは v1/classes/{cohortYear}{classCode}/{grade}_{value}.json に配置される。cohortYear は入学年度、classCode はコース記号、grade は学年、value は 学期 / 期別の識別子。トップレベルは {学年文字列: {クラス文字列: [曜日エントリ]}}",
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "description": "学年オブジェクト（プロパティ名は学年番号の文字列、例: '1', '2'）。",
+    "additionalProperties": {
+      "type": "array",
+      "description": "クラスごとの 1 週間の時間割（プロパティ名はクラス記号、例: 'B', 'M'）。曜日エントリの配列。",
+      "items": {
+        "type": "object",
+        "required": ["day", "classes"],
+        "additionalProperties": false,
+        "properties": {
+          "day": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 6,
+            "description": "曜日番号。0=月曜, 1=火曜, 2=水曜, 3=木曜, 4=金曜, 5=土曜, 6=日曜。通常は 0-4 のみ。"
+          },
+          "classes": {
+            "type": "array",
+            "minItems": 1,
+            "description": "その日の授業コマ（時系列順）。",
+            "items": {
+              "type": "object",
+              "required": ["start", "end", "name"],
+              "additionalProperties": false,
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                  "description": "開始時刻 (HH:MM, 24h, JST)。日付は持たない。"
+                },
+                "end": {
+                  "type": "string",
+                  "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                  "description": "終了時刻 (HH:MM, 24h, JST)。140 分・50 分等の特殊コマでは start から計算した終了時刻が入る。"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "科目名。特殊な授業時間は科目名末尾にカッコで '(140 分)' 等が付く。"
+                },
+                "teacher": {
+                  "type": ["string", "null"],
+                  "description": "担当教員名。未定の場合は null。"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

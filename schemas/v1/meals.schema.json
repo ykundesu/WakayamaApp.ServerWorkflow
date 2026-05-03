@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/meals.schema.json",
+  "title": "Daily Menus (v1)",
+  "description": "1 週間分の寮食メニュー。ファイル名はその週の月曜日の YYYY-MM-DD で、配置先は v1/meals/{YYYY-MM-DD}.json。day フィールドは月をまたぐ可能性があるため、年情報はファイル名から復元する必要がある（v2 で ISO 日付に統一予定）。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "menus": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/MenuDay"},
+      "description": "1 週間（最大 7 日）の MenuDay の並び。日付順は保証されないため、消費側でソート想定。"
+    }
+  },
+  "required": ["menus"],
+  "$defs": {
+    "Nutritional": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "1 食あたりの栄養素値。LLM が PDF から抽出するため値は概算。",
+      "properties": {
+        "E": {"type": "number", "minimum": 0, "description": "エネルギー (kcal)"},
+        "P": {"type": "number", "minimum": 0, "description": "たんぱく質 (g)"},
+        "F": {"type": "number", "minimum": 0, "description": "脂質 (g)"},
+        "Ca": {"type": "number", "minimum": 0, "description": "カルシウム (mg)"},
+        "S": {"type": "number", "minimum": 0, "description": "食塩相当量 (g)"}
+      },
+      "required": ["E", "P", "F", "Ca", "S"]
+    },
+    "MenuItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "1 つのメニュー（A/B など同食種内の選択肢）。",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "メニュー区分（例: 'A', 'B', '共通', '特別' など）。"
+        },
+        "main": {
+          "type": "string",
+          "description": "主菜名。朝食では PDF 上で最上段にあるメニューを各 type に複製する仕様。"
+        },
+        "subs": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "副菜・汁物・主食など。PDF の '共通' 欄は全 type の subs に展開される。"
+        },
+        "isRice": {
+          "type": "boolean",
+          "description": "ライス系（ご飯・どんぶり等）かどうか。注意: 互換性維持のため camelCase を採用しているが、他フィールドは snake_case 寄り。v2 で命名統一予定。"
+        },
+        "isCurry": {
+          "type": "boolean",
+          "description": "カレーかどうか。アプリ側でアイコン表示を切り替えるためのフラグ。"
+        },
+        "nutritional": {"$ref": "#/$defs/Nutritional"}
+      },
+      "required": ["type", "main", "subs", "isRice", "isCurry", "nutritional"]
+    },
+    "Meal": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/MenuItem"}
+    },
+    "MenuDay": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ある 1 日の朝昼晩のメニューセット。休日や祝日では breakfast/lunch/dinner のいずれかが null になり得る。",
+      "properties": {
+        "day": {
+          "type": "string",
+          "pattern": "^(0[1-9]|1[0-2])/(0[1-9]|[12][0-9]|3[01])$",
+          "description": "月日 (MM/DD)。年は持たないので、ファイル名（週月曜日）から逆算する必要がある。"
+        },
+        "breakfast": {
+          "type": ["array", "null"],
+          "items": {"$ref": "#/$defs/MenuItem"},
+          "description": "朝食。null は 'PDF にデータがない' の意味（休日等）。空配列にはしない。"
+        },
+        "lunch": {
+          "type": ["array", "null"],
+          "items": {"$ref": "#/$defs/MenuItem"},
+          "description": "昼食。null は 'PDF にデータがない' の意味。"
+        },
+        "dinner": {
+          "type": ["array", "null"],
+          "items": {"$ref": "#/$defs/MenuItem"},
+          "description": "夕食。null は 'PDF にデータがない' の意味。"
+        }
+      },
+      "required": ["day"]
+    }
+  }
+}

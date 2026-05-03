@@ -1,8 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-APIクライアント
-Gemini/OpenRouter API呼び出しの統一インターフェース
+"""LLM API クライアント（Gemini / OpenRouter 両対応）。
+
+このモジュールは ``processors/`` から呼び出される LLM クライアントの集約点。
+モデル名の `/` 有無で OpenRouter / Gemini を切り分けて使う運用 (main.py の
+``model_uses_openrouter()`` 参照) を前提に、両プロバイダ向けのクラス・関数を
+ここに集めている。
+
+公開 API:
+    - ``GeminiCaller``           : google-genai 経由で構造化出力 (JSON Schema) を強制
+    - ``OpenRouterCaller``       : OpenAI 互換 Chat Completions の thin client
+    - ``call_gemini_multimodal`` : ``GeminiCaller`` に依存しない関数版（rules で利用）
+    - ``is_503_error``           : tenacity の retry 判定で使う 503 / UNAVAILABLE 判別
+
+設計メモ:
+    - 共通インターフェイス（Protocol）はまだ存在しない。``processors/`` 側で
+      ``use_openrouter`` フラグの分岐を持っており、改善ロードマップで
+      ``LLMCaller`` Protocol への統一を予定（``docs/architecture.md`` 参照）。
+    - リトライは ``tenacity`` を使い、503 / UNAVAILABLE のみ自動再試行する。
+      JSON Schema 不整合のような恒久エラーまでリトライしないようにするため、
+      ``is_503_error`` で限定している。
+    - ``Retry-After`` および ``X-RateLimit-Reset[-Requests]`` ヘッダを尊重する
+      （``_retry_after_from_headers`` 参照）。OpenRouter / Gemini ともに
+      これらのヘッダで明示された待ち時間が来た場合、tenacity の指数バックオフ
+      よりこちらを優先したい意図がある。
 """
 
 import os
@@ -21,6 +42,12 @@ from .json_extractor import try_json_loads, JsonType
 
 logger = logging.getLogger(__name__)
 
+# 2001-09-09 (UNIX 時刻 1,000,000,000) 以後の数値はエポック秒、それ以前の値は
+# 「相対秒数」として解釈する。OpenRouter / Gemini どちらの RateLimit ヘッダでも
+# 「次にリクエスト可能になる時刻」をエポック秒で返す実装と「待つべき秒数」を
+# 返す実装が混在しているため、この閾値で機械的に判別している。
+EPOCH_THRESHOLD_SECONDS = 1_000_000_000
+
 # Gemini API用
 try:
     from google import genai
@@ -31,7 +58,7 @@ except ImportError:
     types = None
     _gemini_available = False
 
-# OpenRouter API用
+# OpenRouter API用（OpenAI 互換 REST を直接叩く形なので requests のみで足りる）
 try:
     import requests
     _requests_available = True
@@ -82,14 +109,24 @@ def _parse_retry_after(value: Optional[str]) -> Optional[float]:
 
 
 def _parse_rate_limit_reset(value: Optional[str]) -> Optional[float]:
+    """``X-RateLimit-Reset`` 系ヘッダを「待つべき秒数」に正規化する。
+
+    値の意味がプロバイダ実装ごとに異なる:
+        - エポック秒（"次に実行可能になる絶対時刻"）
+        - 相対秒数（"今から何秒待てばよいか"）
+    どちらかは ``EPOCH_THRESHOLD_SECONDS`` を境に機械判定する。
+    返り値は常に「今から何秒待てばよいか」（>=0）。
+    """
     if not value:
         return None
     try:
         reset = float(value)
     except ValueError:
         return None
-    if reset > 1_000_000_000:
+    if reset > EPOCH_THRESHOLD_SECONDS:
+        # 絶対時刻（エポック秒）として解釈し、現在時刻との差分を返す。
         return max(0.0, reset - time.time())
+    # 相対秒数として解釈する。負値は 0 にクリップ。
     return max(0.0, reset)
 
 

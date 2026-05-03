@@ -1,8 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Git操作
-WakayamaServerリポジトリへのコミット＆プッシュ
+"""WakayamaServer リポジトリの clone / commit / push を担うラッパ。
+
+公開 API:
+    - ``init_git_repo(server_repo_url, server_repo_path, github_token, branch)``
+        対象パスにリポジトリを clone する（既存ならフェッチ + リセット）。
+        トークンは ``https://x-access-token:TOKEN@github.com/...`` 形式で
+        URL に埋め込んで認証する。
+    - ``commit_and_push(server_repo_path, message, branch)``
+        全ステージング → commit → push。push の失敗時は ``False`` を返すのみで、
+        例外は呼び出し側に伝搬しない（main 側で通知 + 後始末を一元化するため）。
+
+注意点:
+    - GitHub Actions 上では ``GITHUBACCOUNT_TOKEN`` シークレットを使う運用
+      （標準の ``GITHUB_TOKEN`` ではなくサーバ側リポへの権限を持つ別 token）。
+    - クローンディレクトリは原則「使い捨て」。CI では actions/checkout の作業
+      ディレクトリとは別場所に展開してから push する。
 """
 
 import logging

@@ -1,6 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""School rules processing pipeline."""
+"""学校規則 PDF → 章 / 条文構造 JSON への変換パイプライン。
+
+このプロセッサは他 3 リソースより重く、ファイル単位ではなく **章 / ルール単位の
+差分管理** を行う。1 つの規則ページに数十の PDF があり、毎回すべてを LLM に投げ
+直すとコスト・時間とも重いため、PDF URL / メタデータ / ハッシュの変化を個別に
+判定し、必要なルールだけ regenerate する仕組みを内包している。
+
+入力:
+    - 規則ページの章 / ルール構造（``scrape_rules_page`` の出力）
+    - LLM (Gemini / OpenRouter)、``--rules-model`` でフォールバック候補可
+    - YomitokuOCR（``--use-yomitoku`` で有効化、PDF→Markdown 前段）
+
+出力:
+    - ``{out_dir}/rules/{ruleId}.json``  ← 個別ルール本体（rule_detail.schema.json）
+    - ``{out_dir}/index.json``           ← 章 + ルールメタ一覧（rules_index.schema.json）
+    - ``{out_dir}/chapters.json``        ← 章メタのみ
+    - ``{out_dir}/manifest.json``        ← バッチ追跡（rules_manifest.schema.json）
+    - 最終配置先は ``v1/school-rules/`` 直下
+    - LLM 出力 (最小ペイロード) のスキーマ: ``RULES_SCHEMA`` および
+      ``schemas/v1/rules.schema.json``。実書き出し形は ``compose_rule_detail``
+      で meta を合成して ``schemas/v1/rule_detail.schema.json`` 準拠に整形。
+
+差分判定の概要 (process_school_rules 内):
+    - 既存 ``index.json`` の rule メタを読み、 ``existing_rules_by_*`` のマップで
+      引けるようにしておく
+    - 新しい構造から ``RuleItem`` を組み立て、対応する既存ルールがある場合:
+        * ``pdfUrl`` が変わった → 内容再生成
+        * メタデータ（chapterId / title / order）だけ変わった → メタ再生成
+        * ハッシュが変わった → 内容再生成
+    - 既存に無いルールは新規生成、構造から消えたルールは ``removedRuleIds`` に
+
+設計メモ:
+    - 命名は v1 仕様で **完全 camelCase**。他リソースとの不整合は v2 で統一予定。
+    - LLM 出力の JSON 修復 (``_extract_minimal_payload`` 周辺) はプロンプト変更に
+      敏感。プロンプト本文を変える場合は出力差分を必ず確認すること。
+    - YomitokuOCR + Markdown 化を挟むのは PDF テキスト抽出が崩れるケース対策で、
+      Vision モデルだけだと条文番号の取りこぼしが多かったため。
+"""
 
 from __future__ import annotations
 

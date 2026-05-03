@@ -1,8 +1,30 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-授業PDF処理
-時間割PDFを処理してfinal/ディレクトリ構造で出力
+"""時間割 PDF → コホート / 学年 / 期別 JSON への変換パイプライン。
+
+入力:
+    - 授業ページから取得した時間割 PDF（学年・コース別に複数）
+    - LLM (Gemini / OpenRouter) と画像化の DPI 設定
+
+出力:
+    - ``{out_dir}/final/{cohortYear}{classCode}/{grade}_{value}.json``
+      例: ``2025B/2_0.json`` = 2025 年度入学・B コース・2 年・前期
+    - 最終配置先は ``v1/classes/{cohortYear}{classCode}/{grade}_{value}.json``
+    - スキーマ: ``CLASSES_SCHEMA`` および ``schemas/v1/classes.schema.json``
+
+処理の流れ:
+    1. PDF を ``render_pdf_pages`` で画像化
+    2. ``PDFProcessor`` 経由で LLM に投げ、学年×クラス×曜日エントリを抽出
+    3. ``build_final_outputs`` でコホート年度（入学年度）・期別（前期 / 後期）に
+       切り分けて ``final/`` 配下に書き出す
+
+仕様メモ:
+    - ``day`` は曜日番号（0=月曜 〜 6=日曜）。通常は 0-4 のみ
+    - ``start`` / ``end`` は ``HH:MM`` 形式の JST。**日付情報は持たない**
+      （v2 で ISO8601 化予定）
+    - 140 分・50 分等の特殊コマは LLM が ``end`` を再計算し、科目名末尾に
+      ``(140分)`` 等を付与する（プロンプトで指示）
+    - JST 定数は学期判定（4-9 月→前期、10-3 月→後期）等の日付計算用
 """
 
 import os
@@ -17,6 +39,8 @@ from common.pdf_processor import PDFProcessor
 from common.image_utils import render_pdf_pages
 
 logger = logging.getLogger(__name__)
+# 学期や年度判定で使う JST タイムゾーン（cron 実行が JST 02:00 想定なので、
+# 「いつ実行しても日本の暦上の年度・期で扱いたい」ためここで固定する）。
 JST = datetime.timezone(datetime.timedelta(hours=9))
 
 

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/dormitory_events.schema.json",
+  "title": "Dormitory Events (v1)",
+  "description": "学生寮の年間行事予定。配置先は v1/dormitory/events/{academic_year}.json。1 ファイル = 1 年度分。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "academic_year": {
+      "type": "integer",
+      "description": "西暦の年度（4 月始まり）。例: 2025。PDF から年度が読み取れない場合は省略され、消費側はファイル名から復元する。"
+    },
+    "events": {
+      "type": "array",
+      "description": "行事の配列。ソート順は保証されない。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["date", "grade", "name"],
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "行事日。形式は MM/DD（年情報は academic_year から復元）。期間ものは抽出時に複数行に展開済み。"
+          },
+          "grade": {
+            "anyOf": [
+              {"type": "integer", "minimum": 1, "maximum": 5},
+              {"type": "null"}
+            ],
+            "description": "対象学年 1-5。'全学年' '全寮生' '対象なし' '不明' はすべて null。NULL は 'すべて' の意味と 'アプリ側で判断不能' の意味の両方を含むため曖昧。v2 で明確化予定。"
+          },
+          "name": {
+            "type": "string",
+            "description": "行事名。"
+          }
+        }
+      }
+    }
+  },
+  "required": ["events"]
+}

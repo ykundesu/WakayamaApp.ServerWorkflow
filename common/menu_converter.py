@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-メニューデータの形式変換
-旧形式（Daily Menus）から新形式（All Menus）への変換を行う
+"""寮食 LLM 出力の整形ユーティリティ。
+
+LLM が PDF から抽出した日次メニュー (``Daily Menus`` 形）を、アプリ側が
+受け取る「全メニュー」形 (``v1/meals/{week}.json`` の中身) に変換する。
+
+このコンバータが担うルール:
+    - PDF の '共通' 欄に書かれた副菜を A/B 双方の ``subs`` に展開
+    - ``type`` の正規化（``_ALLOWED_TYPES`` の範囲に集約）
+    - 朝食では PDF 最上段のメニューを A/B 双方の ``main`` に複製
+    - ライス / カレー判定 → ``isRice`` / ``isCurry`` フラグ
 """
 
 import datetime as _dt
 from typing import Any, Dict, List, Optional
 
+# 出力 JSON の MenuItem.type が取り得る値。LLM が "A1" "ベジ" 等の独自表現を
+# 返した場合でも、後段でこの集合に丸め込む（_coerce_type 参照）。
 _ALLOWED_TYPES = {"A", "B", "カレー"}
 
 

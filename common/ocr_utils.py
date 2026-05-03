@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Yomitoku OCRユーティリティ
-OCR処理の共通化
+"""YomitokuOCR ラッパ（任意依存）。
+
+YomitokuOCR は学校規則 PDF の前段（PDF→Markdown 化）で使用する。インストール
+されていない環境でも本体ワークフローが動くように、import は try/except で
+遅延させ、実行時に未インストールならフラグで判別して呼び出し側でスキップする
+パターンを採っている。
+
+注意: モデルロードが重い（数百 MB）ため、呼び出しは最小限に抑える設計
+（``YomitokuOCR`` クラスでシングルトン的に保持）。
 """
 
 import logging

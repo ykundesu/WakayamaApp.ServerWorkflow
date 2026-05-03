@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-画像処理ユーティリティ
-PDFレンダリング、画像分割などの共通処理
+"""PDF / 画像の前処理ユーティリティ。
+
+公開 API:
+    - ``render_pdf_pages(pdf_path, dpi)``  PDF を 1 ページ 1 画像 (PIL.Image) に展開
+    - ``render_page_to_pil``               単一ページのレンダリング
+    - ``crop_top_bottom`` / ``split_lr``   特殊レイアウト時のページ分割
+    - ``save_image``                       ファイル書き出し
+
+DPI のデフォルト値はリソース依存（meals=288, classes/rules=220 など）。
+高 DPI は LLM の認識精度を上げる代わりに、ペイロードサイズと処理時間を
+押し上げる。トレードオフは呼び出し側で調整する想定。
 """
 
 import io

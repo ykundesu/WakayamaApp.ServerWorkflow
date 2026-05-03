@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/rule_detail.schema.json",
+  "title": "School Rule Detail (v1, written)",
+  "description": "実際に v1/school-rules/rules/{ruleId}.json として書き出される構造。LLM 抽出結果（rules.schema.json）+ メタデータの合成形。compose_rule_detail() (processors/school_rules_processor.py) が生成する。",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "ルール ID（'rule-NNNN' 形式）。ファイル名と一致する。"
+    },
+    "chapterId": {
+      "type": "string",
+      "description": "所属する章 ID（'chapter-NNNN' 形式）。index.json の chapters[].id と対応。"
+    },
+    "title": {
+      "type": "string",
+      "description": "ルールタイトル（PDF タイトル相当）。"
+    },
+    "order": {
+      "type": "integer",
+      "description": "章内での表示順序（1 始まり）。"
+    },
+    "pdfUrl": {
+      "type": "string",
+      "format": "uri",
+      "description": "出典 PDF の URL。差分検知のキーにもなる。"
+    },
+    "summary": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "要約。LLM が生成できなかった場合 null。"
+    },
+    "sourcePage": {
+      "anyOf": [{"type": "integer"}, {"type": "null"}],
+      "description": "出典 PDF 内のページ番号（任意、現状 null 固定）。"
+    },
+    "lastUpdated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "このルールが最後に regenerate / update された ISO8601 日時 (UTC)。"
+    },
+    "sections": {
+      "type": "array",
+      "description": "rules.schema.json#sections と同形。"
+    },
+    "articles": {
+      "type": "array",
+      "description": "互換のためのフラットな条文配列（古い書き出しでは使われていた）。新規生成では sections を優先。"
+    },
+    "otherTexts": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "条文構造に該当しない補足テキスト。"
+    }
+  },
+  "required": ["id", "chapterId", "title", "pdfUrl", "lastUpdated"]
+}

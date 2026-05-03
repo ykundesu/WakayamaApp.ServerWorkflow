@@ -1,8 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-ファイル配置管理
-出力JSONをWakayamaServerの適切なディレクトリに配置
+"""WakayamaServer リポジトリへのファイル配置 + 状態管理。
+
+このモジュールは「``output/`` 配下の中間ファイル」を「``WakayamaServer/v1/...``
+配下の最終形」に再配置する責務を持つ。コピーするだけでなく、既存の処理済み
+ハッシュ一覧 / 寮行事状態とのマージも担当する。
+
+公開 API:
+    - ``has_server_target_data(server_repo_path, target)``
+        サーバ側にすでに対象リソースのデータが存在するか
+        （初回 push 判定や rebuild 判定のフラグに使用）
+    - ``copy_meals_files`` / ``copy_final_files`` / ``copy_dormitory_events_files``
+      / ``copy_school_rules_files``
+        各リソース別の配置ロジック。配置先パス / ファイル名規則は
+        ``schemas/v1/`` および ``docs/output_schema.md`` を参照。
+    - ``load_processed_hashes`` / ``merge_and_write_processed_hashes``
+        ``v1/sources/list/{target}.json`` の読み書き（``processed: [hash...]`` 形式）
+    - ``load_dormitory_events_state`` / ``merge_and_write_dormitory_events_state``
+        ``v1/sources/list/dormitory_events.json`` の読み書き
+        （``last_url`` / ``last_hash`` 形式、他リソースとは異なるエンベロープ）
+
+設計メモ:
+    - ハッシュの保存形式は v1 互換のため当面 ``{"processed": [...]}`` のまま
+      （events のみ別エンベロープ）。改善ロードマップで共通エンベロープへの
+      移行を検討中。
+    - 関数ベース API を採っており、状態を持たない。``StateStore`` クラスへの
+      集約は計画済み（docs/architecture.md の改善ロードマップ参照）。
 """
 
 import json

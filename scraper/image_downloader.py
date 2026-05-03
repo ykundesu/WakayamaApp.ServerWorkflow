@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Image downloader and update checker."""
+"""画像ダウンローダー + 履歴ベースの更新チェック。
+
+主に寮行事予定（``dormitory_events``）で使用する。寮行事は同一 URL の
+画像が年度内に随時上書きされる運用なので、PDF と異なり「前回の URL と
+ハッシュ」を引数で受け取り、その差分で更新有無を判定する。
+
+公開 API:
+    - ``download_image(url, save_path, headers=None) -> bool``
+    - ``get_file_hash(file_path) -> Optional[str]``  (SHA-256 hex)
+    - ``check_image_updated(url, save_path, last_url, last_hash) -> (updated, new_hash)``
+"""
 
 from __future__ import annotations
 

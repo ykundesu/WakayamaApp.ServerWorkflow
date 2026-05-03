@@ -1,8 +1,20 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-PDF処理の共通ロジック
-PDF→画像変換、ページ分割、API呼び出しの統合処理
+"""ページ単位 LLM 呼び出しのオーケストレータ。
+
+各 ``processors/*_processor.py`` は ``PDFProcessor`` を介して 1 ページずつ
+LLM へ画像 + プロンプトを投げ、返ってきた JSON を集約する。
+
+責務:
+    - LLM クライアント (Gemini / OpenRouter) の選択と保持
+    - YomitokuOCR の遅延ロード（OCR モード時）
+    - ページごとの呼び出しループ + 結果のマージ（``deep_merge``）
+    - リトライ / フォールバック制御
+
+設計メモ:
+    - ``call_mode`` で「Gemini 構造化出力 / OpenRouter / Gemini 関数版」の 3 系統
+      を分岐している。これは現在 ``LLMCaller`` Protocol 化で整理予定。
+    - ``schema`` は LLM への ``response_format`` として渡る JSON Schema。
 """
 
 import os

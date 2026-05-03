@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/rules_index.schema.json",
+  "title": "School Rules Index (v1)",
+  "description": "v1/school-rules/index.json の構造。章一覧 + ルールメタ一覧を持つ。アプリ側が一覧画面を構築するための入口ファイル。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "generatedAt", "chapters", "rules"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z$",
+      "description": "生成バージョン (YYYYMMDDTHHMMSSZ)。"
+    },
+    "generatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "生成日時 (ISO8601, UTC)。"
+    },
+    "chapters": {
+      "type": "array",
+      "description": "章メタの配列。chapters.json と同じ内容。",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "title", "order"],
+        "properties": {
+          "id": {"type": "string", "description": "'chapter-NNNN' 形式。"},
+          "title": {"type": "string"},
+          "order": {"type": "integer", "description": "表示順序（1 始まり）。"}
+        }
+      }
+    },
+    "rules": {
+      "type": "array",
+      "description": "ルールメタの配列。order と chapter の order でソート済み。",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "chapterId", "title", "order", "pdfUrl"],
+        "properties": {
+          "id": {"type": "string"},
+          "chapterId": {"type": "string"},
+          "title": {"type": "string"},
+          "summary": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+          "order": {"type": "integer"},
+          "pdfUrl": {"type": "string", "format": "uri"},
+          "sourcePage": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+          "lastUpdated": {"anyOf": [{"type": "string", "format": "date-time"}, {"type": "null"}]}
+        }
+      }
+    }
+  }
+}

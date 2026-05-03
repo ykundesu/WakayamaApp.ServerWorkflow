@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ykundesu/wakayamaapp.serverworkflow/schemas/v1/rules.schema.json",
+  "title": "School Rules — LLM minimal payload (v1)",
+  "description": "LLM が PDF/Markdown から抽出する『学校規則 1 件』の最小ペイロード。これは LLM 出力構造であり、最終的な v1/school-rules/rules/{ruleId}.json はこれに meta（id, title, chapterId, pdfUrl, lastUpdated 等）を付与した形になる。命名は他リソースと異なり完全 camelCase。詳細は docs/output_schema.md を参照。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "規則 1 件の要約。LLM が要約できなかった場合 null。"
+    },
+    "sections": {
+      "type": "array",
+      "description": "章 / 節の並び。PDF 上の見出し構造に対応する。",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "articles"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "節タイトル。"
+          },
+          "articles": {
+            "type": "array",
+            "description": "節に含まれる条文。",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["label", "content"],
+              "properties": {
+                "label": {
+                  "anyOf": [{"type": "string"}, {"type": "null"}],
+                  "description": "条文ラベル（例: '第一条', '第3条'）。LLM が認識できなかった場合 null。"
+                },
+                "content": {
+                  "type": "string",
+                  "description": "条文本文。改行は \\n でエスケープ。"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "other_texts": {
+      "anyOf": [{"type": "string"}, {"type": "null"}],
+      "description": "条文構造に当てはまらない補足テキスト。前文や別表など。"
+    }
+  },
+  "required": ["summary", "sections", "other_texts"]
+}

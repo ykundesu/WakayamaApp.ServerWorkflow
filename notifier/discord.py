@@ -1,8 +1,18 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Discord Webhook通知
-処理結果をDiscordに送信
+"""Discord Webhook を経由した処理結果通知。
+
+公開 API:
+    - ``notify_success(webhook_url, target, message, fields)``  処理成功通知（緑）
+    - ``notify_error(webhook_url, target, message, fields)``    エラー通知（赤）
+    - ``notify_no_update(webhook_url, target, message)``        更新なし通知（灰）
+
+設計メモ:
+    - **通知の失敗で本処理を止めない**: Discord 側の障害やレート制限で通知が
+      飛ばなくても、本来の役割（JSON 生成 + サーバ更新）は成功したまま終える
+      べきという方針。例外は捕捉してログのみ残す。
+    - 現状は Embed の組み立てと POST が 1 関数に詰まっている。
+      フォーマッタ / センダーの分離は改善ロードマップに記載。
 """
 
 import os

@@ -1,6 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Dormitory events image processing."""
+"""寮行事予定画像 → 年度ごとの JSON への変換パイプライン。
+
+入力:
+    - 寮ページから取得した行事予定の単一画像 (PNG/JPG)
+    - LLM (Gemini / OpenRouter)
+
+出力:
+    - ``{out_dir}/dormitory_events_output/events/{academic_year}.json``
+    - 最終配置先は ``v1/dormitory/events/{academic_year}.json``
+    - スキーマ: ``EVENTS_SCHEMA`` および ``schemas/v1/dormitory_events.schema.json``
+
+仕様メモ:
+    - 寮行事は年度内ずっと **同一 URL の画像が上書き更新される** 運用なので、
+      単一の ``last_url`` / ``last_hash`` 状態で差分判定する。冪等性は
+      ``v1/sources/list/dormitory_events.json`` で管理 (file_manager.py)。
+    - ``date`` は ``MM/DD``。年は ``academic_year`` から復元する設計（v1 互換）。
+    - ``grade`` は 1-5 の整数 or null。null には「全学年」「対象なし」「不明」が
+      混在しうる（既知の曖昧さ。v2 で明示フラグに分離予定）。
+    - ``ERA_OFFSETS`` は和暦→西暦変換テーブル（PDF 上の '令和7年度' 等を扱うため）。
+"""
 
 from __future__ import annotations
 
