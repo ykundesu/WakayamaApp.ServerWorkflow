@@ -6,6 +6,31 @@ on:
   schedule:
     - cron: '0 17 * * *'  # UTC 17:00 = JST 02:00
   workflow_dispatch:  # 手動実行も可能
+    inputs:
+      process:
+        description: '処理対象'
+        required: false
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - meals
+          - classes
+          - dormitory_events
+          - rules
+      regenerate:
+        description: '強制再生成する対象'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - meals:latest
+          - meals:current
+          - meals:next
+          - meals:all
+          - classes
+          - dormitory_events
 
 jobs:
   process:
@@ -57,13 +82,20 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
+          PROCESS_TARGET: ${{ github.event.inputs.process || 'all' }}
+          REGENERATE_TARGET: ${{ github.event.inputs.regenerate || 'none' }}
         run: |
+          REGENERATE_ARGS=()
+          if [ -n "$REGENERATE_TARGET" ] && [ "$REGENERATE_TARGET" != "none" ]; then
+            REGENERATE_ARGS+=(--regenerate "$REGENERATE_TARGET")
+          fi
+
           # model: OpenAI公式APIのGPT-5.5を使う
           # fallback-model: OpenAI側が失敗した場合はKimiにフォールバックする
           # rules-model: とりあえず安いGPT-OSS-120Bを指定する
           # openrouter-provider: 安く出力トークンが大きいプロバイダを指定して品質の悪いプロバイダにルーティングされないようにする
           python -X utf8 main.py \
-            --process all \
+            --process "$PROCESS_TARGET" \
             --output-dir ./output \
             --model gpt-5.5 \
             --fallback-model moonshotai/kimi-k2.6 \
@@ -74,7 +106,8 @@ jobs:
             --branch main \
             --use-yomitoku \
             --openrouter-provider '{"order":["venice/int4","parasail/int4","inceptron/int4","io-net/int4"],"allow_fallbacks":true}' \
-            --rules-openrouter-provider '{"order":["deepinfra/fp4","ncompass","novita/fp4"],"allow_fallbacks":true}'
+            --rules-openrouter-provider '{"order":["deepinfra/fp4","ncompass","novita/fp4"],"allow_fallbacks":true}' \
+            "${REGENERATE_ARGS[@]}"
       
       - name: Upload output artifacts
         if: always()

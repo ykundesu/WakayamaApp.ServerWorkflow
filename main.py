@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 import logging
+import shutil
 from pathlib import Path
 from typing import Optional, List, Dict, Set, Union
 from urllib.parse import urlparse
@@ -88,6 +89,7 @@ def process_dormitory_meals(
     fallback_model: Optional[str] = None,
     fallback_api_key: Optional[str] = None,
     fallback_openrouter_provider: Optional[str] = None,
+    regenerate_selectors: Optional[Set[str]] = None,
 ) -> tuple[bool, List[str], bool]:
     """寮食PDFの処理
     
@@ -117,6 +119,7 @@ def process_dormitory_meals(
         pdf_dir.mkdir(parents=True, exist_ok=True)
         meals_output_root = output_dir / "meals_output"
         logger.debug(f"出力ディレクトリ: pdf_dir={pdf_dir}, meals_output_root={meals_output_root}")
+        latest_meal_index = get_latest_meal_pdf_index(pdf_infos)
         
         processed: List[Dict[str, str]] = []
         skipped_existing: List[str] = []
@@ -138,12 +141,28 @@ def process_dormitory_meals(
                 fallback_label = f"{year}-{month:02d}"
             label = (date_label or fallback_label).replace("/", "-").replace(" ", "_")
             target_label = pdf_info.get("target", "unknown")
+            regenerate_candidates = {
+                normalize_regenerate_selector(index),
+                normalize_regenerate_selector(fallback_label),
+                normalize_regenerate_selector(label),
+                normalize_regenerate_selector(target_label),
+            }
+            if date_label:
+                regenerate_candidates.add(normalize_regenerate_selector(date_label))
+            if index == latest_meal_index:
+                regenerate_candidates.add("latest")
+            force_regenerate = should_regenerate(regenerate_selectors, regenerate_candidates)
             
             logger.info(f"処理対象 ({target_label}): {label} -> {pdf_url}")
+            if force_regenerate:
+                logger.info(f"{label} は再生成指定に一致したため、既存データや処理済みハッシュがあっても再処理します。")
             
             month_output_dir = meals_output_root / label
             meals_dir = month_output_dir / "meals"
-            if meals_dir.exists() and any(meals_dir.glob("*.json")):
+            if force_regenerate and month_output_dir.exists():
+                logger.info(f"{label} の既存出力を削除してから再生成します: {month_output_dir}")
+                shutil.rmtree(month_output_dir)
+            elif meals_dir.exists() and any(meals_dir.glob("*.json")):
                 logger.info(f"{label} の既存データが見つかったため処理をスキップします。")
                 skipped_existing.append(label)
                 continue
@@ -158,26 +177,31 @@ def process_dormitory_meals(
                 # フォールバック: 既存の更新チェックを使用
                 is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
                 if not is_updated:
-                    msg = f"{label} のPDFが更新されていません。"
-                    logger.info(msg)
-                    skipped_not_updated.append(label)
-                    continue
-                
-                logger.info(f"{label} のPDFをダウンロード中...")
-                if not download_pdf(pdf_url, pdf_path):
-                    error_message = f"{label} のPDFのダウンロードに失敗しました。"
-                    logger.error(error_message)
-                    logger.info("had error is true")
-                    had_error = True
-                    if discord_webhook:
-                        notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
-                    continue
+                    if force_regenerate and pdf_path.exists():
+                        logger.info(f"{label} のPDFは未更新ですが、再生成指定のため既存PDFを使用します。")
+                    else:
+                        msg = f"{label} のPDFが更新されていません。"
+                        logger.info(msg)
+                        skipped_not_updated.append(label)
+                        continue
+                else:
+                    logger.info(f"{label} のPDFをダウンロード中...")
+                    if not download_pdf(pdf_url, pdf_path):
+                        error_message = f"{label} のPDFのダウンロードに失敗しました。"
+                        logger.error(error_message)
+                        logger.info("had error is true")
+                        had_error = True
+                        if discord_webhook:
+                            notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
+                        continue
             else:
                 # ハッシュを計算
                 pdf_hash = get_file_hash(temp_path)
                 if pdf_hash:
                     if pdf_hash in processed_hashes:
-                        if server_repo_path and not has_server_target_data(server_repo_path, "meals"):
+                        if force_regenerate:
+                            logger.info(f"{label} のPDFは既処理ハッシュですが、再生成指定のため処理します。")
+                        elif server_repo_path and not has_server_target_data(server_repo_path, "meals"):
                             logger.warning(
                                 "%s のPDFは既処理ハッシュですが、サーバー側の寮食データが見つからないため再生成します。",
                                 label,
@@ -197,20 +221,23 @@ def process_dormitory_meals(
                     # フォールバック: 既存の更新チェックを使用
                     is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
                     if not is_updated:
-                        msg = f"{label} のPDFが更新されていません。"
-                        logger.info(msg)
-                        skipped_not_updated.append(label)
-                        continue
-                    
-                    logger.info(f"{label} のPDFをダウンロード中...")
-                    if not download_pdf(pdf_url, pdf_path):
-                        error_message = f"{label} のPDFのダウンロードに失敗しました。"
-                        logger.error(error_message)
-                        logger.info("had error is true")  
-                        had_error = True
-                        if discord_webhook:
-                            notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
-                        continue
+                        if force_regenerate and pdf_path.exists():
+                            logger.info(f"{label} のPDFは未更新ですが、再生成指定のため既存PDFを使用します。")
+                        else:
+                            msg = f"{label} のPDFが更新されていません。"
+                            logger.info(msg)
+                            skipped_not_updated.append(label)
+                            continue
+                    else:
+                        logger.info(f"{label} のPDFをダウンロード中...")
+                        if not download_pdf(pdf_url, pdf_path):
+                            error_message = f"{label} のPDFのダウンロードに失敗しました。"
+                            logger.error(error_message)
+                            logger.info("had error is true")
+                            had_error = True
+                            if discord_webhook:
+                                notify_error(discord_webhook, "meals", error_message, {"PDF": pdf_url})
+                            continue
             
             logger.info(f"{label} のPDFダウンロードが完了しました")
             
@@ -303,6 +330,7 @@ def process_classes(
     fallback_model: Optional[str] = None,
     fallback_api_key: Optional[str] = None,
     fallback_openrouter_provider: Optional[str] = None,
+    regenerate: bool = False,
 ) -> tuple[bool, Optional[str], bool]:
     """授業PDFの処理
     
@@ -339,23 +367,28 @@ def process_classes(
             # フォールバック: 既存の更新チェックを使用
             is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
             if not is_updated:
-                logger.info("PDFが更新されていません。")
-                if discord_webhook:
-                    notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                return True, None, False
-            
-            logger.info("PDFをダウンロード中...")
-            if not download_pdf(pdf_url, pdf_path):
-                logger.error("PDFのダウンロードに失敗しました。")
-                if discord_webhook:
-                    notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
-                return False, None, False
+                if regenerate and pdf_path.exists():
+                    logger.info("授業PDFは未更新ですが、再生成指定のため既存PDFを使用します。")
+                else:
+                    logger.info("PDFが更新されていません。")
+                    if discord_webhook:
+                        notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
+                    return True, None, False
+            else:
+                logger.info("PDFをダウンロード中...")
+                if not download_pdf(pdf_url, pdf_path):
+                    logger.error("PDFのダウンロードに失敗しました。")
+                    if discord_webhook:
+                        notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
+                    return False, None, False
         else:
             # ハッシュを計算
             pdf_hash = get_file_hash(temp_path)
             if pdf_hash:
                 if pdf_hash in processed_hashes:
-                    if server_repo_path and not has_server_target_data(server_repo_path, "classes"):
+                    if regenerate:
+                        logger.info("授業PDFは既処理ハッシュですが、再生成指定のため処理します。")
+                    elif server_repo_path and not has_server_target_data(server_repo_path, "classes"):
                         logger.warning("授業PDFは既処理ハッシュですが、サーバー側の授業データが見つからないため再生成します。")
                     else:
                         logger.info(f"PDFは既に処理済みです（ハッシュ: {pdf_hash[:16]}...）。スキップします。")
@@ -373,23 +406,29 @@ def process_classes(
                 # フォールバック: 既存の更新チェックを使用
                 is_updated, _ = check_pdf_updated(pdf_url, pdf_path)
                 if not is_updated:
-                    logger.info("PDFが更新されていません。")
-                    if discord_webhook:
-                        notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
-                    return True, None, False
-                
-                logger.info("PDFをダウンロード中...")
-                if not download_pdf(pdf_url, pdf_path):
-                    logger.error("PDFのダウンロードに失敗しました。")
-                    if discord_webhook:
-                        notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
-                    return False, None, False
+                    if regenerate and pdf_path.exists():
+                        logger.info("授業PDFは未更新ですが、再生成指定のため既存PDFを使用します。")
+                    else:
+                        logger.info("PDFが更新されていません。")
+                        if discord_webhook:
+                            notify_no_update(discord_webhook, "classes", "PDFが更新されていません。")
+                        return True, None, False
+                else:
+                    logger.info("PDFをダウンロード中...")
+                    if not download_pdf(pdf_url, pdf_path):
+                        logger.error("PDFのダウンロードに失敗しました。")
+                        if discord_webhook:
+                            notify_error(discord_webhook, "classes", "PDFのダウンロードに失敗しました。")
+                        return False, None, False
         
         logger.info("PDFダウンロードが完了しました")
         
         # PDF処理
         logger.info("授業PDFを処理中...")
         classes_output_dir = output_dir / "classes_output"
+        if regenerate and classes_output_dir.exists():
+            logger.info(f"授業の既存出力を削除してから再生成します: {classes_output_dir}")
+            shutil.rmtree(classes_output_dir)
         success = process_classes_pdf(
             pdf_path=str(pdf_path),
             out_dir=classes_output_dir,
@@ -439,6 +478,7 @@ def process_dormitory_events(
     fallback_model: Optional[str] = None,
     fallback_api_key: Optional[str] = None,
     fallback_openrouter_provider: Optional[str] = None,
+    regenerate: bool = False,
 ) -> tuple[bool, Dict[str, Optional[str]], bool]:
     """寮行事予定画像の処理"""
     logger.info("寮行事予定の処理を開始します")
@@ -498,10 +538,13 @@ def process_dormitory_events(
 
         if not updated:
             should_force_rebuild = bool(
-                server_repo_path and not has_server_target_data(server_repo_path, "dormitory_events")
+                regenerate or (server_repo_path and not has_server_target_data(server_repo_path, "dormitory_events"))
             )
             if should_force_rebuild:
-                logger.warning("寮行事画像は未更新ですが、サーバー側データが見つからないため再生成します。")
+                if regenerate:
+                    logger.info("寮行事画像は未更新ですが、再生成指定のため再処理します。")
+                else:
+                    logger.warning("寮行事画像は未更新ですが、サーバー側データが見つからないため再生成します。")
                 if not image_path.exists():
                     if not download_image(image_url, image_path):
                         error_message = "寮行事画像の再ダウンロードに失敗しました。"
@@ -528,6 +571,13 @@ def process_dormitory_events(
             if discord_webhook:
                 notify_error(discord_webhook, "dormitory_events", error_message, {"画像URL": image_url})
             return False, processed_state, False
+
+        if regenerate:
+            for subdir_name in ("json", "events"):
+                subdir = events_output_root / subdir_name
+                if subdir.exists():
+                    logger.info(f"寮行事の既存出力を削除してから再生成します: {subdir}")
+                    shutil.rmtree(subdir)
 
         logger.info("寮行事予定画像を処理中...")
         result = process_dormitory_events_image(
@@ -768,6 +818,105 @@ def update_server(
     return False
 
 
+REGENERATE_TARGET_ALIASES = {
+    "meal": "meals",
+    "meals": "meals",
+    "dormitory-meals": "meals",
+    "dormitory_meals": "meals",
+    "class": "classes",
+    "classes": "classes",
+    "event": "dormitory_events",
+    "events": "dormitory_events",
+    "dormitory-event": "dormitory_events",
+    "dormitory-events": "dormitory_events",
+    "dormitory_event": "dormitory_events",
+    "dormitory_events": "dormitory_events",
+    "calendar": "dormitory_events",
+}
+
+REGENERATE_SELECTOR_ALIASES = {
+    "newest": "latest",
+    "latest": "latest",
+    "current": "current",
+    "now": "current",
+    "next": "next",
+    "upcoming": "next",
+    "all": "all",
+}
+
+
+def normalize_regenerate_selector(value: object) -> str:
+    normalized = str(value).strip().lower().replace("/", "-").replace(" ", "_")
+    return REGENERATE_SELECTOR_ALIASES.get(normalized.replace("_", "-"), normalized)
+
+
+def normalize_regenerate_target(raw_target: str) -> str:
+    normalized = raw_target.strip().lower().replace(" ", "-")
+    target = REGENERATE_TARGET_ALIASES.get(normalized)
+    if not target:
+        valid = "meals, classes, dormitory_events"
+        raise ValueError(f"再生成対象が不正です: {raw_target}（指定可能: {valid}）")
+    return target
+
+
+def parse_regenerate_specs(raw_regenerate: Optional[Union[List[str], str]]) -> Dict[str, Set[str]]:
+    if not raw_regenerate:
+        return {}
+
+    raw_items = [raw_regenerate] if isinstance(raw_regenerate, str) else raw_regenerate
+    specs: Dict[str, Set[str]] = {}
+    for item in raw_items:
+        if not item:
+            continue
+        for part in str(item).split(","):
+            token = part.strip()
+            if not token:
+                continue
+            if ":" in token:
+                raw_target, raw_selector = token.split(":", 1)
+            elif "=" in token:
+                raw_target, raw_selector = token.split("=", 1)
+            else:
+                raw_target, raw_selector = token, "latest"
+
+            target = normalize_regenerate_target(raw_target)
+            selector = normalize_regenerate_selector(raw_selector or "latest")
+            specs.setdefault(target, set()).add(selector)
+
+    return specs
+
+
+def format_regenerate_specs(specs: Dict[str, Set[str]]) -> str:
+    return ", ".join(f"{target}:{'/'.join(sorted(selectors))}" for target, selectors in sorted(specs.items()))
+
+
+def should_regenerate(regenerate_selectors: Optional[Set[str]], candidates: Set[str]) -> bool:
+    if not regenerate_selectors:
+        return False
+    return "all" in regenerate_selectors or bool(regenerate_selectors & candidates)
+
+
+def get_latest_meal_pdf_index(pdf_infos: List[Dict[str, object]]) -> int:
+    latest_index = 1
+    latest_key: Optional[tuple[int, int, int]] = None
+
+    for index, pdf_info in enumerate(pdf_infos, start=1):
+        try:
+            year = int(pdf_info.get("year"))  # type: ignore[arg-type]
+            month = int(pdf_info.get("month"))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            continue
+
+        key = (year, month, index)
+        if latest_key is None or key > latest_key:
+            latest_key = key
+            latest_index = index
+
+    if latest_key is None:
+        return len(pdf_infos) if pdf_infos else 1
+    return latest_index
+
+
 def parse_rules_models(raw_rules_model: Optional[Union[List[str], str]], default_model: str) -> List[str]:
     if not raw_rules_model:
         return [default_model]
@@ -796,6 +945,13 @@ def main():
     
     parser = argparse.ArgumentParser(description="ServerProcesser自動化ワークフロー")
     parser.add_argument("--process", choices=["meals", "classes", "dormitory_events", "rules", "all"], default="all", help="処理タイプ")
+    parser.add_argument(
+        "--regenerate",
+        type=str,
+        action="append",
+        default=None,
+        help="特定データを強制再生成（例: meals:latest, meals:current, meals:next, classes, dormitory_events。カンマ区切り/複数回指定可）",
+    )
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
     parser.add_argument("--api-key", type=str, default=None, help="APIキー（未指定なら環境変数 GOOGLE_API_KEY を使用）")
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="使用するモデル")
@@ -838,8 +994,17 @@ def main():
     parser.add_argument("--branch", type=str, default="main", help="Gitブランチ")
     
     args = parser.parse_args()
+    try:
+        regenerate_specs = parse_regenerate_specs(args.regenerate)
+    except ValueError as e:
+        parser.error(str(e))
 
     logger.info(f"処理タイプ: {args.process}")
+    if regenerate_specs:
+        logger.info(f"再生成指定: {format_regenerate_specs(regenerate_specs)}")
+        for target in regenerate_specs:
+            if args.process != "all" and args.process != target:
+                logger.warning(f"{target} の再生成指定は --process {args.process} では実行されません。")
     rules_models = parse_rules_models(args.rules_model, args.model)
     logger.info(f"使用モデル: {args.model}")
     if args.fallback_model:
@@ -907,6 +1072,9 @@ def main():
         if args.fallback_model
         else None
     )
+    normal_use_yomitoku = args.use_yomitoku and not model_uses_openai(args.model)
+    if args.use_yomitoku and not normal_use_yomitoku:
+        logger.info("通常処理ではOpenAI公式APIモデルを使用するため、Yomitoku OCRを無効化します。")
     
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -958,7 +1126,7 @@ def main():
             api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
-            use_yomitoku=args.use_yomitoku,
+            use_yomitoku=normal_use_yomitoku,
             discord_webhook=discord_webhook,
             prompt_file=args.prompt_file,
             processed_hashes=meals_processed_hashes,
@@ -967,6 +1135,7 @@ def main():
             fallback_model=args.fallback_model,
             fallback_api_key=resolved_fallback_api_key,
             fallback_openrouter_provider=openrouter_provider,
+            regenerate_selectors=regenerate_specs.get("meals"),
         )
         had_any_error |= (not meals_ok)
         meals_collected_hashes = collected
@@ -979,7 +1148,7 @@ def main():
             api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
-            use_yomitoku=args.use_yomitoku,
+            use_yomitoku=normal_use_yomitoku,
             discord_webhook=discord_webhook,
             processed_state=dormitory_events_state,
             server_repo_path=server_repo_path if args.update_server else None,
@@ -987,6 +1156,7 @@ def main():
             fallback_model=args.fallback_model,
             fallback_api_key=resolved_fallback_api_key,
             fallback_openrouter_provider=openrouter_provider,
+            regenerate=bool(regenerate_specs.get("dormitory_events")),
         )
         had_any_error |= (not events_ok)
         dormitory_events_state = events_state
@@ -999,7 +1169,7 @@ def main():
             api_key=resolved_model_api_key,
             model=args.model,
             dpi=args.dpi,
-            use_yomitoku=args.use_yomitoku,
+            use_yomitoku=normal_use_yomitoku,
             discord_webhook=discord_webhook,
             processed_hashes=classes_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
@@ -1007,6 +1177,7 @@ def main():
             fallback_model=args.fallback_model,
             fallback_api_key=resolved_fallback_api_key,
             fallback_openrouter_provider=openrouter_provider,
+            regenerate=bool(regenerate_specs.get("classes")),
         )
         had_any_error |= (not classes_ok)
         classes_collected_hash = collected_hash
