@@ -146,6 +146,72 @@ def _looks_like_schema_format_error(resp: Any) -> bool:
     )
 
 
+def _schema_type_includes(schema: Dict[str, Any], schema_type: str) -> bool:
+    raw_type = schema.get("type")
+    if raw_type == schema_type:
+        return True
+    if isinstance(raw_type, list) and schema_type in raw_type:
+        return True
+    return False
+
+
+def _collect_openai_structured_schema_issues(
+    schema: Any,
+    path: str = "$",
+    *,
+    root: bool = False,
+) -> List[str]:
+    if not isinstance(schema, dict):
+        return []
+
+    issues: List[str] = []
+    if root:
+        if "anyOf" in schema:
+            issues.append(f"{path}: root anyOf is not supported")
+        if not _schema_type_includes(schema, "object"):
+            issues.append(f"{path}: root schema must be an object")
+
+    properties = schema.get("properties")
+    is_object_schema = _schema_type_includes(schema, "object") or isinstance(properties, dict)
+    if is_object_schema:
+        if schema.get("additionalProperties") is not False:
+            issues.append(f"{path}: additionalProperties must be false")
+        if isinstance(properties, dict):
+            required = schema.get("required")
+            if not isinstance(required, list):
+                issues.append(f"{path}: required must include every property")
+            else:
+                missing = sorted(set(properties) - set(required))
+                if missing:
+                    issues.append(f"{path}: required missing {', '.join(missing)}")
+
+            for key, value in properties.items():
+                issues.extend(
+                    _collect_openai_structured_schema_issues(
+                        value,
+                        f"{path}.properties.{key}",
+                    )
+                )
+
+    for key in ("items", "additionalProperties"):
+        value = schema.get(key)
+        if isinstance(value, dict):
+            issues.extend(_collect_openai_structured_schema_issues(value, f"{path}.{key}"))
+
+    for key in ("anyOf", "oneOf"):
+        value = schema.get(key)
+        if isinstance(value, list):
+            for idx, item in enumerate(value):
+                issues.extend(_collect_openai_structured_schema_issues(item, f"{path}.{key}[{idx}]"))
+
+    defs = schema.get("$defs")
+    if isinstance(defs, dict):
+        for key, value in defs.items():
+            issues.extend(_collect_openai_structured_schema_issues(value, f"{path}.$defs.{key}"))
+
+    return issues
+
+
 def get_http_status_code(exception: BaseException) -> Optional[int]:
     if _requests_available and requests is not None and isinstance(exception, requests.HTTPError):
         if exception.response is not None:
@@ -312,11 +378,22 @@ class OpenAICaller:
     def _build_text_format(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not schema:
             return None
+        issues = _collect_openai_structured_schema_issues(schema, root=True)
+        if issues:
+            preview = "; ".join(issues[:3])
+            if len(issues) > 3:
+                preview += f"; ... ({len(issues)} issues)"
+            logger.warning(
+                "OpenAI Structured Outputs非対応のJSON SchemaのためJSON modeを使用します: %s",
+                preview,
+            )
+            return {"format": {"type": "json_object"}}
         return {
             "format": {
                 "type": "json_schema",
                 "name": "output",
                 "schema": schema,
+                "strict": True,
             }
         }
 
@@ -402,7 +479,14 @@ class OpenAICaller:
                     data=json.dumps(body),
                     timeout=120,
                 )
-                if self.text_format and not used_json_mode_fallback and _looks_like_schema_format_error(resp):
+                text_format_type = (
+                    body.get("text", {})
+                    .get("format", {})
+                    .get("type")
+                    if isinstance(body.get("text"), dict)
+                    else None
+                )
+                if text_format_type == "json_schema" and not used_json_mode_fallback and _looks_like_schema_format_error(resp):
                     logger.warning(
                         "OpenAI Responses APIがJSON Schema形式を受け付けませんでした。JSON modeで再試行します: %s",
                         _safe_response_text(resp),

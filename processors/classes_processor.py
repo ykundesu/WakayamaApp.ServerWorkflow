@@ -46,7 +46,7 @@ CLASSES_SCHEMA = {
                         "minItems": 1,
                         "items": {
                             "type": "object",
-                            "required": ["start", "end", "name"],
+                            "required": ["start", "end", "name", "teacher"],
                             "properties": {
                                 "start": {
                                     "type": "string",

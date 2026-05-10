@@ -92,7 +92,7 @@ MEALS_SCHEMA = {
                     "description": "nullable",
                 },
             },
-            "required": ["day"],
+            "required": ["day", "breakfast", "lunch", "dinner"],
         },
     },
 }

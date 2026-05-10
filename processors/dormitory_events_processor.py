@@ -40,7 +40,12 @@ EVENTS_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
     "properties": {
-        "academic_year": {"type": "integer"},
+        "academic_year": {
+            "anyOf": [
+                {"type": "integer"},
+                {"type": "null"},
+            ]
+        },
         "events": {
             "type": "array",
             "items": {
@@ -55,7 +60,7 @@ EVENTS_SCHEMA = {
             },
         },
     },
-    "required": ["events"],
+    "required": ["academic_year", "events"],
 }
 
 
@@ -73,7 +78,7 @@ DORMITORY_EVENTS_PROMPT = """この画像は学生寮の行事予定表です。
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "academic_year": { "type": "integer" },
+    "academic_year": { "anyOf": [{ "type": "integer" }, { "type": "null" }] },
     "events": {
       "type": "array",
       "items": {
@@ -88,7 +93,7 @@ DORMITORY_EVENTS_PROMPT = """この画像は学生寮の行事予定表です。
       }
     }
   },
-  "required": ["events"]
+  "required": ["academic_year", "events"]
 }
 ```
 """
