@@ -75,6 +75,15 @@ def resolve_api_key_for_model(
     return gemini_api_key or ""
 
 
+def looks_like_openrouter_key(api_key: Optional[str]) -> bool:
+    if not api_key:
+        return False
+    normalized = api_key.strip()
+    if normalized.lower().startswith("bearer "):
+        normalized = normalized[7:].strip()
+    return normalized.startswith("sk-or-")
+
+
 def process_dormitory_meals(
     output_dir: Path,
     api_key: str,
@@ -1063,6 +1072,9 @@ def main():
 
     if needs_openai_key and not openai_api_key:
         logger.error("OpenAI APIキーが設定されていません。")
+        sys.exit(1)
+    if needs_openai_key and looks_like_openrouter_key(openai_api_key):
+        logger.error("OPENAI_API_KEY に OpenRouter のキーが設定されているようです。OpenAI公式APIのキーを設定してください。")
         sys.exit(1)
 
     google_api_key = api_key or ""

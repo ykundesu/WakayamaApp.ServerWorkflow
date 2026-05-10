@@ -18,6 +18,7 @@ from .api_client import (
     OpenAICaller,
     OpenRouterCaller,
     call_gemini_multimodal,
+    is_non_retryable_http_error,
     model_uses_openai,
     model_uses_openrouter,
 )
@@ -307,6 +308,14 @@ class PDFProcessor:
                         raise ValueError("応答からJSONを抽出できませんでした")
                     return result
                 except Exception as e:
+                    if is_non_retryable_http_error(e):
+                        logger.error(
+                            "ページ %s のAPI呼び出しで非リトライ対象のHTTPエラーが発生しました (%s): %s",
+                            page_num,
+                            model_label,
+                            e,
+                        )
+                        raise
                     if attempt >= 3:
                         logger.error(f"ページ {page_num} のAPI呼び出し/JSON抽出に3回失敗しました ({model_label}): {e}")
                         raise

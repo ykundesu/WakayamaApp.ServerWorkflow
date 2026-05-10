@@ -114,6 +114,50 @@ def _retry_after_from_headers(headers: Mapping[str, str]) -> Optional[float]:
     )
 
 
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _normalize_bearer_api_key(api_key: str) -> str:
+    normalized = api_key.strip()
+    if normalized.lower().startswith("bearer "):
+        return normalized[7:].strip()
+    return normalized
+
+
+def _safe_response_text(resp: Any, max_chars: int = 1200) -> str:
+    try:
+        payload = resp.json()
+        text = json.dumps(payload, ensure_ascii=False)
+    except Exception:
+        text = getattr(resp, "text", "") or ""
+    text = text.replace("\n", "\\n")
+    if len(text) > max_chars:
+        return text[:max_chars] + "...<truncated>"
+    return text
+
+
+def _looks_like_schema_format_error(resp: Any) -> bool:
+    if getattr(resp, "status_code", None) != 400:
+        return False
+    text = _safe_response_text(resp).lower()
+    return any(
+        marker in text
+        for marker in ("json_schema", "text.format", "response_format", "schema", "strict")
+    )
+
+
+def get_http_status_code(exception: BaseException) -> Optional[int]:
+    if _requests_available and requests is not None and isinstance(exception, requests.HTTPError):
+        if exception.response is not None:
+            return exception.response.status_code
+    return None
+
+
+def is_non_retryable_http_error(exception: BaseException) -> bool:
+    status_code = get_http_status_code(exception)
+    return status_code is not None and status_code not in RETRYABLE_HTTP_STATUSES
+
+
 def _normalize_openrouter_provider(
     raw: Optional[Union[str, Mapping[str, Any]]],
     env_var: Optional[str] = "OPENROUTER_PROVIDER",
@@ -238,7 +282,7 @@ class GeminiCaller:
 class OpenAICaller:
     """OpenAI 公式 API 呼び出しクラス"""
 
-    OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+    OPENAI_API_URL = "https://api.openai.com/v1/responses"
 
     def __init__(
         self,
@@ -256,24 +300,24 @@ class OpenAICaller:
         if not api_key:
             raise RuntimeError("OPENAI_API_KEY が見つかりません。環境変数 or --openai-api-key を設定してください。")
 
-        self.api_key = api_key
+        self.api_key = _normalize_bearer_api_key(api_key)
         self.model = model
         self.temperature = temperature
         self.schema = schema
         self.reasoning_effort = reasoning_effort
-        self.response_format = self._build_response_format(schema)
+        self.text_format = self._build_text_format(schema)
         logger.info("OpenAICallerの初期化が完了しました")
 
     @staticmethod
-    def _build_response_format(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _build_text_format(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not schema:
             return None
         return {
-            "type": "json_schema",
-            "json_schema": {
+            "format": {
+                "type": "json_schema",
                 "name": "output",
                 "schema": schema,
-            },
+            }
         }
 
     def call_multimodal(
@@ -283,7 +327,7 @@ class OpenAICaller:
         extra_headers: Optional[Dict[str, str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """OpenAI Chat Completions に data URL で画像を渡す。"""
+        """OpenAI Responses API に data URL で画像を渡す。"""
         logger.info(f"OpenAI API呼び出し中: model={self.model}, 画像数={len(images)}")
         logger.debug(f"プロンプト長: {len(prompt_text)}文字, 画像キー: {list(images.keys())}")
         assert requests is not None
@@ -296,16 +340,16 @@ class OpenAICaller:
 
         data_urls = []
         for im in images.values():
-            data_urls.append({"type": "image_url", "image_url": {"url": img_to_data_url(im), "detail": "high"}})
+            data_urls.append({"type": "input_image", "image_url": img_to_data_url(im), "detail": "high"})
 
         if data_urls:
-            full_prompt_content: Union[str, List[Dict[str, Any]]] = [{"type": "text", "text": prompt_text}] + data_urls
+            full_prompt_content: Union[str, List[Dict[str, Any]]] = [{"type": "input_text", "text": prompt_text}] + data_urls
         else:
             full_prompt_content = prompt_text
 
         body: Dict[str, Any] = {
             "model": self.model,
-            "messages": [
+            "input": [
                 {
                     "role": "user",
                     "content": full_prompt_content,
@@ -313,33 +357,32 @@ class OpenAICaller:
             ],
         }
         if self.reasoning_effort:
-            body["reasoning_effort"] = self.reasoning_effort
+            body["reasoning"] = {"effort": self.reasoning_effort}
         if extra_body:
             body.update(extra_body)
-        if self.response_format and "response_format" not in body:
-            body["response_format"] = self.response_format
+        if self.text_format and "text" not in body:
+            body["text"] = self.text_format
+        used_json_mode_fallback = False
 
         def _redact_body_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 redacted = json.loads(json.dumps(payload, ensure_ascii=False))
             except Exception:
                 redacted = dict(payload)
-            messages = redacted.get("messages")
-            if isinstance(messages, list):
-                for message in messages:
-                    if not isinstance(message, dict):
+            input_items = redacted.get("input")
+            if isinstance(input_items, list):
+                for input_item in input_items:
+                    if not isinstance(input_item, dict):
                         continue
-                    content = message.get("content")
+                    content = input_item.get("content")
                     if isinstance(content, list):
                         for item in content:
                             if not isinstance(item, dict):
                                 continue
-                            if item.get("type") == "image_url":
+                            if item.get("type") == "input_image":
                                 image_url = item.get("image_url")
-                                if isinstance(image_url, dict):
-                                    url = image_url.get("url")
-                                    if isinstance(url, str):
-                                        image_url["url"] = f"<omitted {len(url)} chars>"
+                                if isinstance(image_url, str):
+                                    item["image_url"] = f"<omitted {len(image_url)} chars>"
             return redacted
 
         logger.info(
@@ -359,7 +402,15 @@ class OpenAICaller:
                     data=json.dumps(body),
                     timeout=120,
                 )
-                if resp.status_code in {429, 500, 502, 503, 504}:
+                if self.text_format and not used_json_mode_fallback and _looks_like_schema_format_error(resp):
+                    logger.warning(
+                        "OpenAI Responses APIがJSON Schema形式を受け付けませんでした。JSON modeで再試行します: %s",
+                        _safe_response_text(resp),
+                    )
+                    body["text"] = {"format": {"type": "json_object"}}
+                    used_json_mode_fallback = True
+                    continue
+                if resp.status_code in RETRYABLE_HTTP_STATUSES:
                     retry_after = _retry_after_from_headers(resp.headers)
                     wait_seconds = retry_after if retry_after is not None else min(max_delay, base_delay * (2 ** (attempt - 1)))
                     wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
@@ -373,12 +424,27 @@ class OpenAICaller:
                         )
                         time.sleep(wait_seconds)
                         continue
+                if resp.status_code >= 400:
+                    logger.error(
+                        "OpenAI APIエラー応答: status=%s, body=%s",
+                        resp.status_code,
+                        _safe_response_text(resp),
+                    )
                 resp.raise_for_status()
                 result = resp.json()
                 logger.info("OpenAI API呼び出しが成功しました")
                 logger.debug(f"レスポンス受信: {len(str(result))}文字")
-                return result
+                return self._to_chat_completion_like_response(result)
             except requests.RequestException as e:
+                status_code = None
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    status_code = e.response.status_code
+                if status_code is not None and status_code not in RETRYABLE_HTTP_STATUSES:
+                    logger.warning(
+                        "OpenAI API呼び出しエラー: %s。非リトライ対象のHTTPステータスのため再試行しません",
+                        e,
+                    )
+                    raise
                 if attempt < max_attempts:
                     wait_seconds = min(max_delay, base_delay * (2 ** (attempt - 1)))
                     wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
@@ -395,6 +461,48 @@ class OpenAICaller:
                 raise
 
         raise RuntimeError("OpenAI API呼び出しが失敗しました。")
+
+    @staticmethod
+    def _to_chat_completion_like_response(result: Dict[str, Any]) -> Dict[str, Any]:
+        output_text = result.get("output_text")
+        refusal = None
+        texts: List[str] = []
+
+        output = result.get("output")
+        if isinstance(output, list):
+            for output_item in output:
+                if not isinstance(output_item, dict):
+                    continue
+                content = output_item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for content_item in content:
+                    if not isinstance(content_item, dict):
+                        continue
+                    content_type = content_item.get("type")
+                    if content_type == "output_text":
+                        text = content_item.get("text")
+                        if isinstance(text, str):
+                            texts.append(text)
+                    elif content_type == "refusal":
+                        refusal_value = content_item.get("refusal")
+                        if isinstance(refusal_value, str):
+                            refusal = refusal_value
+
+        if not isinstance(output_text, str):
+            output_text = "".join(texts)
+
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": output_text or "",
+                        "refusal": refusal,
+                    }
+                }
+            ],
+            "raw_response": result,
+        }
 
 
 class OpenRouterCaller:
