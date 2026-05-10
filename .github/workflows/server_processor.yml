@@ -52,18 +52,21 @@ jobs:
       - name: Process PDFs
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUBACCOUNT_TOKEN }}
           SERVER_REPO_URL: ${{ secrets.SERVER_REPO_URL }}
         run: |
-          # model: Kimiに決めた！
+          # model: OpenAI公式APIのGPT-5.5を使う
+          # fallback-model: OpenAI側が失敗した場合はKimiにフォールバックする
           # rules-model: とりあえず安いGPT-OSS-120Bを指定する
           # openrouter-provider: 安く出力トークンが大きいプロバイダを指定して品質の悪いプロバイダにルーティングされないようにする
           python -X utf8 main.py \
             --process all \
             --output-dir ./output \
-            --model moonshotai/kimi-k2.6 \
+            --model gpt-5.5 \
+            --fallback-model moonshotai/kimi-k2.6 \
             --rules-provider openrouter \
             --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \

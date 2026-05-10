@@ -13,7 +13,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
 from .image_utils import render_pdf_pages, render_page_to_pil, crop_top_bottom, split_lr, save_image
-from .api_client import GeminiCaller, OpenRouterCaller, call_gemini_multimodal
+from .api_client import (
+    GeminiCaller,
+    OpenAICaller,
+    OpenRouterCaller,
+    call_gemini_multimodal,
+    model_uses_openai,
+    model_uses_openrouter,
+)
 from .json_extractor import extract_json_from_text, deep_merge, JsonType
 from .ocr_utils import YomitokuOCR
 
@@ -34,6 +41,9 @@ class PDFProcessor:
         yomitoku_device: str = "cpu",
         yomitoku_config: Optional[Path] = None,
         openrouter_provider: Optional[Any] = None,
+        fallback_model: Optional[str] = None,
+        fallback_api_key: Optional[str] = None,
+        fallback_openrouter_provider: Optional[Any] = None,
     ):
         logger.info(f"PDFProcessorを初期化中: model={model}, dpi={dpi}, temperature={temperature}, use_yomitoku={use_yomitoku}")
         self.model = model
@@ -42,26 +52,24 @@ class PDFProcessor:
         self.dpi = dpi
         self.temperature = temperature
         
-        # モデル名に '/' が含まれる場合（例: 'google/gemini-2.5-flash'）は OpenRouter 前提とみなす
-        self.use_openrouter = ("/" in model)
-        logger.debug(f"API種類: {'OpenRouter' if self.use_openrouter else 'Gemini'}")
-        
-        if self.use_openrouter:
-            logger.debug("OpenRouterCallerを作成中...")
-            self.caller = OpenRouterCaller(
-                model=model,
-                api_key=api_key,
+        self.api_provider, self.caller = self._create_caller(
+            model=model,
+            api_key=api_key,
+            schema=schema,
+            temperature=temperature,
+            openrouter_provider=openrouter_provider,
+        )
+        self.use_openrouter = self.api_provider == "openrouter"
+        self.fallback_model = fallback_model
+        self.fallback_api_provider: Optional[str] = None
+        self.fallback_caller: Optional[Any] = None
+        if fallback_model:
+            self.fallback_api_provider, self.fallback_caller = self._create_caller(
+                model=fallback_model,
+                api_key=fallback_api_key,
+                schema=schema,
                 temperature=temperature,
-                schema=schema,
-                provider=openrouter_provider,
-            )
-        else:
-            logger.debug("GeminiCallerを作成中...")
-            self.caller = GeminiCaller(
-                model_name=model,
-                api_key=api_key,
-                schema=schema,
-                temperature=temperature
+                openrouter_provider=fallback_openrouter_provider,
             )
         
         # Yomitoku OCR 準備
@@ -89,6 +97,48 @@ class PDFProcessor:
             logger.debug("Yomitoku OCRは使用しません")
         
         logger.info("PDFProcessorの初期化が完了しました")
+
+    @staticmethod
+    def _create_caller(
+        model: str,
+        api_key: Optional[str],
+        schema: Optional[Dict[str, Any]],
+        temperature: float,
+        openrouter_provider: Optional[Any],
+    ) -> Tuple[str, Any]:
+        if model_uses_openrouter(model):
+            logger.debug("OpenRouterCallerを作成中...")
+            return (
+                "openrouter",
+                OpenRouterCaller(
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    schema=schema,
+                    provider=openrouter_provider,
+                ),
+            )
+        if model_uses_openai(model):
+            logger.debug("OpenAICallerを作成中...")
+            return (
+                "openai",
+                OpenAICaller(
+                    model=model,
+                    api_key=api_key,
+                    temperature=temperature,
+                    schema=schema,
+                ),
+            )
+        logger.debug("GeminiCallerを作成中...")
+        return (
+            "gemini",
+            GeminiCaller(
+                model_name=model,
+                api_key=api_key,
+                schema=schema,
+                temperature=temperature,
+            ),
+        )
     
     def process_page(
         self,
@@ -168,47 +218,56 @@ class PDFProcessor:
                 return "".join([c.get("text", "") if isinstance(c, dict) else str(c) for c in content])
             return str(content)
 
-        def _call_openrouter(prompt_text: str, image_variants: Dict[str, Image.Image], label: str) -> JsonType:
-            resp = self.caller.call_multimodal(prompt_text, image_variants)
-            text = _content_to_text(resp["choices"][0]["message"]["content"])
+        def _call_chat_completion(caller: Any, prompt_text: str, image_variants: Dict[str, Image.Image], label: str) -> JsonType:
+            resp = caller.call_multimodal(prompt_text, image_variants)
+            message = resp["choices"][0]["message"]
+            refusal = message.get("refusal") if isinstance(message, dict) else None
+            if refusal:
+                raise ValueError(f"{label} の応答が拒否されました: {refusal}")
+            text = _content_to_text(message.get("content", "") if isinstance(message, dict) else "")
             result = extract_json_from_text(text)
             if result is None:
                 raise ValueError(f"{label} の応答からJSONを抽出できませんでした")
             return result
 
-        def _call_once() -> JsonType:
+        def _call_once(caller: Any, api_provider: str) -> JsonType:
+            uses_chat_completion = api_provider in {"openrouter", "openai"}
             if call_mode == "single":
-                if self.use_openrouter:
-                    logger.debug("OpenRouter singleモードで呼び出し中...")
-                    return _call_openrouter(
+                if uses_chat_completion:
+                    logger.debug("%s singleモードで呼び出し中...", api_provider)
+                    return _call_chat_completion(
+                        caller,
                         full_prompt,
                         {"full": variants["full"], "left": variants["left"], "right": variants["right"]},
                         "single",
                     )
                 logger.debug("Gemini singleモードで呼び出し中...")
-                return self.caller.generate(full_prompt, [variants["left"], variants["right"], variants["full"]])
+                return caller.generate(full_prompt, [variants["left"], variants["right"], variants["full"]])
 
             if call_mode == "none":
-                if self.use_openrouter:
-                    logger.debug("OpenRouter noneモードで呼び出し中...")
-                    return _call_openrouter(full_prompt, {"full": variants["full"]}, "none")
+                if uses_chat_completion:
+                    logger.debug("%s noneモードで呼び出し中...", api_provider)
+                    return _call_chat_completion(caller, full_prompt, {"full": variants["full"]}, "none")
                 logger.debug("Gemini noneモードで呼び出し中...")
-                return self.caller.generate(full_prompt, [variants["full"]])
+                return caller.generate(full_prompt, [variants["full"]])
 
             logger.debug("tripleモードで複数回呼び出し中...")
-            if self.use_openrouter:
+            if uses_chat_completion:
                 logger.debug("元画像を処理中...")
-                res_original_json = _call_openrouter(
+                res_original_json = _call_chat_completion(
+                    caller,
                     full_prompt + "\n\n(この入力は: 元画像)", {"full": variants["full"]}, "元画像"
                 )
 
                 logger.debug("左半分を処理中...")
-                res_left_json = _call_openrouter(
+                res_left_json = _call_chat_completion(
+                    caller,
                     full_prompt + "\n\n(この入力は: 左半分)", {"left": variants["left"]}, "左半分"
                 )
 
                 logger.debug("右半分を処理中...")
-                res_right_json = _call_openrouter(
+                res_right_json = _call_chat_completion(
+                    caller,
                     full_prompt + "\n\n(この入力は: 右半分)", {"right": variants["right"]}, "右半分"
                 )
 
@@ -222,11 +281,11 @@ class PDFProcessor:
                 return {"page": page_num, "result": merged}
 
             logger.debug("元画像を処理中...")
-            res_original = self.caller.generate(full_prompt + "\n\n(この入力は: 元画像)", [variants["full"]])
+            res_original = caller.generate(full_prompt + "\n\n(この入力は: 元画像)", [variants["full"]])
             logger.debug("左半分を処理中...")
-            res_left = self.caller.generate(full_prompt + "\n\n(この入力は: 左半分)", [variants["left"]])
+            res_left = caller.generate(full_prompt + "\n\n(この入力は: 左半分)", [variants["left"]])
             logger.debug("右半分を処理中...")
-            res_right = self.caller.generate(full_prompt + "\n\n(この入力は: 右半分)", [variants["right"]])
+            res_right = caller.generate(full_prompt + "\n\n(この入力は: 右半分)", [variants["right"]])
 
             if merge_strategy == "bundle":
                 return {"page": page_num, "original": res_original, "left": res_left, "right": res_right}
@@ -237,25 +296,42 @@ class PDFProcessor:
             merged = deep_merge(merged, res_right)
             return {"page": page_num, "result": merged}
 
+        def _run_with_retries(caller: Any, api_provider: str, model_label: str) -> JsonType:
+            result: JsonType = None
+            for attempt in range(1, 4):
+                try:
+                    if attempt > 1:
+                        logger.info(f"ページ {page_num} のAPI呼び出しを再試行します ({model_label}, {attempt}/3)")
+                    result = _call_once(caller, api_provider)
+                    if result is None:
+                        raise ValueError("応答からJSONを抽出できませんでした")
+                    return result
+                except Exception as e:
+                    if attempt >= 3:
+                        logger.error(f"ページ {page_num} のAPI呼び出し/JSON抽出に3回失敗しました ({model_label}): {e}")
+                        raise
+                    logger.warning(f"ページ {page_num} のAPI呼び出し/JSON抽出に失敗しました ({model_label}, {attempt}/3): {e}")
+                    time.sleep(min(2 ** attempt, 8))
+            return result
+
         # API呼び出し
         logger.info(f"ページ {page_num} のAPI呼び出しを開始 (call_mode={call_mode})")
-        last_error: Optional[Exception] = None
-        result_json: JsonType = None
-        for attempt in range(1, 4):
-            try:
-                if attempt > 1:
-                    logger.info(f"ページ {page_num} のAPI呼び出しを再試行します ({attempt}/3)")
-                result_json = _call_once()
-                if result_json is None:
-                    raise ValueError("応答からJSONを抽出できませんでした")
-                break
-            except Exception as e:
-                last_error = e
-                if attempt >= 3:
-                    logger.error(f"ページ {page_num} のAPI呼び出し/JSON抽出に3回失敗しました: {e}")
-                    raise
-                logger.warning(f"ページ {page_num} のAPI呼び出し/JSON抽出に失敗しました ({attempt}/3): {e}")
-                time.sleep(min(2 ** attempt, 8))
+        try:
+            result_json = _run_with_retries(self.caller, self.api_provider, self.model)
+        except Exception as primary_error:
+            if self.fallback_caller is None or self.fallback_api_provider is None or not self.fallback_model:
+                raise
+            logger.warning(
+                "ページ %s の処理をフォールバックモデル %s で再試行します: %s",
+                page_num,
+                self.fallback_model,
+                primary_error,
+            )
+            result_json = _run_with_retries(
+                self.fallback_caller,
+                self.fallback_api_provider,
+                self.fallback_model,
+            )
         
         logger.info(f"ページ {page_num} の処理が完了しました")
         return result_json

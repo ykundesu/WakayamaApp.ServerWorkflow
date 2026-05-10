@@ -148,6 +148,9 @@ def process_meals_pdf(
     yomitoku_config: Optional[Path] = None,
     prompt_file: Optional[Path] = None,  # プロンプトファイル（オプション）
     openrouter_provider: Optional[Any] = None,
+    fallback_model: Optional[str] = None,
+    fallback_api_key: Optional[str] = None,
+    fallback_openrouter_provider: Optional[Any] = None,
 ) -> bool:
     """
     寮食PDFを処理する
@@ -189,6 +192,9 @@ def process_meals_pdf(
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
             openrouter_provider=openrouter_provider,
+            fallback_model=fallback_model,
+            fallback_api_key=fallback_api_key,
+            fallback_openrouter_provider=fallback_openrouter_provider,
         )
         
         # プロンプトテキストを決定（ファイルから読み込むか、デフォルトを使用）

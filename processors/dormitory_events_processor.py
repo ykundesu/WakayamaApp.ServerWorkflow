@@ -231,6 +231,9 @@ def process_dormitory_events_image(
     yomitoku_config: Optional[Path] = None,
     title_hint: Optional[str] = None,
     openrouter_provider: Optional[Any] = None,
+    fallback_model: Optional[str] = None,
+    fallback_api_key: Optional[str] = None,
+    fallback_openrouter_provider: Optional[Any] = None,
 ) -> Optional[Dict[str, Any]]:
     logger.info(f"Processing dormitory events image: {image_path}")
     try:
@@ -248,6 +251,9 @@ def process_dormitory_events_image(
             yomitoku_device=yomitoku_device,
             yomitoku_config=yomitoku_config,
             openrouter_provider=openrouter_provider,
+            fallback_model=fallback_model,
+            fallback_api_key=fallback_api_key,
+            fallback_openrouter_provider=fallback_openrouter_provider,
         )
 
         prompt_text = DORMITORY_EVENTS_PROMPT

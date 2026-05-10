@@ -54,14 +54,23 @@ def model_uses_openrouter(model: str) -> bool:
     return "/" in model
 
 
+def model_uses_openai(model: str) -> bool:
+    """モデル名から OpenAI 公式 API 経由かどうかを判定する。"""
+    normalized = model.lower()
+    return normalized.startswith(("gpt-", "chatgpt-", "o1", "o3", "o4", "o5"))
+
+
 def resolve_api_key_for_model(
     model: str,
     gemini_api_key: Optional[str],
     openrouter_api_key: Optional[str],
+    openai_api_key: Optional[str],
 ) -> str:
     """モデルに応じて利用する API キーを返す。"""
     if model_uses_openrouter(model):
         return openrouter_api_key or ""
+    if model_uses_openai(model):
+        return openai_api_key or ""
     return gemini_api_key or ""
 
 
@@ -76,6 +85,9 @@ def process_dormitory_meals(
     processed_hashes: Optional[Set[str]] = None,
     server_repo_path: Optional[Path] = None,
     openrouter_provider: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+    fallback_api_key: Optional[str] = None,
+    fallback_openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, List[str], bool]:
     """寮食PDFの処理
     
@@ -213,6 +225,9 @@ def process_dormitory_meals(
                 use_yomitoku=use_yomitoku,
                 prompt_file=prompt_file,
                 openrouter_provider=openrouter_provider,
+                fallback_model=fallback_model,
+                fallback_api_key=fallback_api_key,
+                fallback_openrouter_provider=fallback_openrouter_provider,
             )
             
             if success:
@@ -285,6 +300,9 @@ def process_classes(
     processed_hashes: Optional[Set[str]] = None,
     server_repo_path: Optional[Path] = None,
     openrouter_provider: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+    fallback_api_key: Optional[str] = None,
+    fallback_openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, Optional[str], bool]:
     """授業PDFの処理
     
@@ -380,6 +398,9 @@ def process_classes(
             dpi=dpi,
             use_yomitoku=use_yomitoku,
             openrouter_provider=openrouter_provider,
+            fallback_model=fallback_model,
+            fallback_api_key=fallback_api_key,
+            fallback_openrouter_provider=fallback_openrouter_provider,
         )
         
         if success:
@@ -415,6 +436,9 @@ def process_dormitory_events(
     processed_state: Optional[Dict[str, Optional[str]]] = None,
     server_repo_path: Optional[Path] = None,
     openrouter_provider: Optional[str] = None,
+    fallback_model: Optional[str] = None,
+    fallback_api_key: Optional[str] = None,
+    fallback_openrouter_provider: Optional[str] = None,
 ) -> tuple[bool, Dict[str, Optional[str]], bool]:
     """寮行事予定画像の処理"""
     logger.info("寮行事予定の処理を開始します")
@@ -515,6 +539,9 @@ def process_dormitory_events(
             use_yomitoku=use_yomitoku,
             title_hint=title_hint,
             openrouter_provider=openrouter_provider,
+            fallback_model=fallback_model,
+            fallback_api_key=fallback_api_key,
+            fallback_openrouter_provider=fallback_openrouter_provider,
         )
 
         if not result:
@@ -772,6 +799,7 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
     parser.add_argument("--api-key", type=str, default=None, help="APIキー（未指定なら環境変数 GOOGLE_API_KEY を使用）")
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="使用するモデル")
+    parser.add_argument("--fallback-model", type=str, default=None, help="通常処理用フォールバックモデル")
     parser.add_argument(
         "--rules-model",
         type=str,
@@ -786,6 +814,7 @@ def main():
         help="学校規則の抽出プロバイダ",
     )
     parser.add_argument("--openrouter-api-key", type=str, default=None, help="OpenRouter APIキー（未指定なら環境変数 OPENROUTER_API_KEY を使用）")
+    parser.add_argument("--openai-api-key", type=str, default=None, help="OpenAI APIキー（未指定なら環境変数 OPENAI_API_KEY を使用）")
     parser.add_argument(
         "--openrouter-provider",
         type=str,
@@ -813,6 +842,8 @@ def main():
     logger.info(f"処理タイプ: {args.process}")
     rules_models = parse_rules_models(args.rules_model, args.model)
     logger.info(f"使用モデル: {args.model}")
+    if args.fallback_model:
+        logger.info(f"通常処理フォールバックモデル: {args.fallback_model}")
     logger.info(f"規則モデル: {', '.join(rules_models)}")
     logger.info(f"規則プロバイダ: {args.rules_provider}")
     logger.info(f"DPI: {args.dpi}")
@@ -823,29 +854,39 @@ def main():
     # 環境変数から取得
     api_key = args.api_key or os.getenv("GOOGLE_API_KEY")
     openrouter_api_key = args.openrouter_api_key or os.getenv("OPENROUTER_API_KEY")
+    openai_api_key = args.openai_api_key or os.getenv("OPENAI_API_KEY")
     openrouter_provider = args.openrouter_provider or os.getenv("OPENROUTER_PROVIDER")
     rules_openrouter_provider = args.rules_openrouter_provider or os.getenv("RULES_OPENROUTER_PROVIDER")
     discord_webhook = args.discord_webhook or os.getenv("DISCORD_WEBHOOK_URL")
     github_token = args.github_token or os.getenv("GITHUB_TOKEN")
     
     logger.debug(
-        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, OPENROUTER_PROVIDER=%s, RULES_OPENROUTER_PROVIDER=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
+        "環境変数取得状況: API_KEY=%s, OPENROUTER_API_KEY=%s, OPENAI_API_KEY=%s, OPENROUTER_PROVIDER=%s, RULES_OPENROUTER_PROVIDER=%s, DISCORD_WEBHOOK=%s, GITHUB_TOKEN=%s",
         "設定済み" if api_key else "未設定",
         "設定済み" if openrouter_api_key else "未設定",
+        "設定済み" if openai_api_key else "未設定",
         "設定済み" if openrouter_provider else "未設定",
         "設定済み" if rules_openrouter_provider else "未設定",
         "設定済み" if discord_webhook else "未設定",
         "設定済み" if github_token else "未設定",
     )
 
-    primary_model_uses_openrouter = model_uses_openrouter(args.model)
-    needs_gemini_key = args.process in ["meals", "classes", "dormitory_events", "all"] and not primary_model_uses_openrouter
+    normal_models = [args.model]
+    if args.fallback_model:
+        normal_models.append(args.fallback_model)
+    uses_normal_models = args.process in ["meals", "classes", "dormitory_events", "all"]
+    needs_gemini_key = uses_normal_models and any(
+        not model_uses_openrouter(model) and not model_uses_openai(model)
+        for model in normal_models
+    )
     if args.process in ["rules", "all"] and args.rules_provider == "gemini":
         needs_gemini_key = True
 
-    needs_openrouter_key = args.process in ["meals", "classes", "dormitory_events", "all"] and primary_model_uses_openrouter
+    needs_openrouter_key = uses_normal_models and any(model_uses_openrouter(model) for model in normal_models)
     if args.process in ["rules", "all"] and args.rules_provider == "openrouter":
         needs_openrouter_key = True
+
+    needs_openai_key = uses_normal_models and any(model_uses_openai(model) for model in normal_models)
 
     if needs_gemini_key and not api_key:
         logger.error("Google APIキーが設定されていません。")
@@ -855,8 +896,17 @@ def main():
         logger.error("OpenRouter APIキーが設定されていません。")
         sys.exit(1)
 
+    if needs_openai_key and not openai_api_key:
+        logger.error("OpenAI APIキーが設定されていません。")
+        sys.exit(1)
+
     google_api_key = api_key or ""
-    resolved_model_api_key = resolve_api_key_for_model(args.model, api_key, openrouter_api_key)
+    resolved_model_api_key = resolve_api_key_for_model(args.model, api_key, openrouter_api_key, openai_api_key)
+    resolved_fallback_api_key = (
+        resolve_api_key_for_model(args.fallback_model, api_key, openrouter_api_key, openai_api_key)
+        if args.fallback_model
+        else None
+    )
     
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -914,6 +964,9 @@ def main():
             processed_hashes=meals_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
             openrouter_provider=openrouter_provider,
+            fallback_model=args.fallback_model,
+            fallback_api_key=resolved_fallback_api_key,
+            fallback_openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not meals_ok)
         meals_collected_hashes = collected
@@ -931,6 +984,9 @@ def main():
             processed_state=dormitory_events_state,
             server_repo_path=server_repo_path if args.update_server else None,
             openrouter_provider=openrouter_provider,
+            fallback_model=args.fallback_model,
+            fallback_api_key=resolved_fallback_api_key,
+            fallback_openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not events_ok)
         dormitory_events_state = events_state
@@ -948,6 +1004,9 @@ def main():
             processed_hashes=classes_processed_hashes,
             server_repo_path=server_repo_path if args.update_server else None,
             openrouter_provider=openrouter_provider,
+            fallback_model=args.fallback_model,
+            fallback_api_key=resolved_fallback_api_key,
+            fallback_openrouter_provider=openrouter_provider,
         )
         had_any_error |= (not classes_ok)
         classes_collected_hash = collected_hash

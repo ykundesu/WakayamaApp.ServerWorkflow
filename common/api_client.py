@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 APIクライアント
-Gemini/OpenRouter API呼び出しの統一インターフェース
+Gemini/OpenAI/OpenRouter API呼び出しの統一インターフェース
 """
 
 import os
@@ -31,7 +31,7 @@ except ImportError:
     types = None
     _gemini_available = False
 
-# OpenRouter API用
+# OpenRouter/OpenAI API用
 try:
     import requests
     _requests_available = True
@@ -40,6 +40,17 @@ except ImportError:
     _requests_available = False
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+
+
+def model_uses_openrouter(model: str) -> bool:
+    """モデル名から OpenRouter 経由かどうかを判定する。"""
+    return "/" in model
+
+
+def model_uses_openai(model: str) -> bool:
+    """モデル名から OpenAI 公式 API 経由かどうかを判定する。"""
+    normalized = model.lower()
+    return normalized.startswith(("gpt-", "chatgpt-", "o1", "o3", "o4", "o5"))
 
 
 def is_503_error(exception: BaseException) -> bool:
@@ -222,6 +233,168 @@ class GeminiCaller:
             else:
                 logger.error(f"Gemini API呼び出しエラー: {e}", exc_info=True)
             raise
+
+
+class OpenAICaller:
+    """OpenAI 公式 API 呼び出しクラス"""
+
+    OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
+
+    def __init__(
+        self,
+        model: str,
+        api_key: Optional[str] = None,
+        temperature: float = 0.2,
+        schema: Optional[Dict[str, Any]] = None,
+        reasoning_effort: str = "medium",
+    ):
+        logger.info(f"OpenAICallerを初期化中: model={model}, reasoning_effort={reasoning_effort}")
+        if not _requests_available:
+            raise RuntimeError("requests パッケージがインストールされていません。")
+
+        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY が見つかりません。環境変数 or --openai-api-key を設定してください。")
+
+        self.api_key = api_key
+        self.model = model
+        self.temperature = temperature
+        self.schema = schema
+        self.reasoning_effort = reasoning_effort
+        self.response_format = self._build_response_format(schema)
+        logger.info("OpenAICallerの初期化が完了しました")
+
+    @staticmethod
+    def _build_response_format(schema: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        if not schema:
+            return None
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "output",
+                "schema": schema,
+            },
+        }
+
+    def call_multimodal(
+        self,
+        prompt_text: str,
+        images: Dict[str, Image.Image],
+        extra_headers: Optional[Dict[str, str]] = None,
+        extra_body: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """OpenAI Chat Completions に data URL で画像を渡す。"""
+        logger.info(f"OpenAI API呼び出し中: model={self.model}, 画像数={len(images)}")
+        logger.debug(f"プロンプト長: {len(prompt_text)}文字, 画像キー: {list(images.keys())}")
+        assert requests is not None
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+
+        data_urls = []
+        for im in images.values():
+            data_urls.append({"type": "image_url", "image_url": {"url": img_to_data_url(im), "detail": "high"}})
+
+        if data_urls:
+            full_prompt_content: Union[str, List[Dict[str, Any]]] = [{"type": "text", "text": prompt_text}] + data_urls
+        else:
+            full_prompt_content = prompt_text
+
+        body: Dict[str, Any] = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": full_prompt_content,
+                }
+            ],
+        }
+        if self.reasoning_effort:
+            body["reasoning_effort"] = self.reasoning_effort
+        if extra_body:
+            body.update(extra_body)
+        if self.response_format and "response_format" not in body:
+            body["response_format"] = self.response_format
+
+        def _redact_body_for_log(payload: Dict[str, Any]) -> Dict[str, Any]:
+            try:
+                redacted = json.loads(json.dumps(payload, ensure_ascii=False))
+            except Exception:
+                redacted = dict(payload)
+            messages = redacted.get("messages")
+            if isinstance(messages, list):
+                for message in messages:
+                    if not isinstance(message, dict):
+                        continue
+                    content = message.get("content")
+                    if isinstance(content, list):
+                        for item in content:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") == "image_url":
+                                image_url = item.get("image_url")
+                                if isinstance(image_url, dict):
+                                    url = image_url.get("url")
+                                    if isinstance(url, str):
+                                        image_url["url"] = f"<omitted {len(url)} chars>"
+            return redacted
+
+        logger.info(
+            "OpenAI request body (redacted): %s",
+            json.dumps(_redact_body_for_log(body), ensure_ascii=False),
+        )
+
+        max_attempts = 5
+        base_delay = 2.0
+        max_delay = 60.0
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = requests.post(
+                    self.OPENAI_API_URL,
+                    headers=headers,
+                    data=json.dumps(body),
+                    timeout=120,
+                )
+                if resp.status_code in {429, 500, 502, 503, 504}:
+                    retry_after = _retry_after_from_headers(resp.headers)
+                    wait_seconds = retry_after if retry_after is not None else min(max_delay, base_delay * (2 ** (attempt - 1)))
+                    wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "OpenAI APIがレート制限/過負荷です (status=%s)。%.1f秒待機して再試行します (%s/%s)",
+                            resp.status_code,
+                            wait_seconds,
+                            attempt,
+                            max_attempts,
+                        )
+                        time.sleep(wait_seconds)
+                        continue
+                resp.raise_for_status()
+                result = resp.json()
+                logger.info("OpenAI API呼び出しが成功しました")
+                logger.debug(f"レスポンス受信: {len(str(result))}文字")
+                return result
+            except requests.RequestException as e:
+                if attempt < max_attempts:
+                    wait_seconds = min(max_delay, base_delay * (2 ** (attempt - 1)))
+                    wait_seconds = min(max_delay, wait_seconds + random.uniform(0.0, 0.5))
+                    logger.warning(
+                        "OpenAI API呼び出しエラー: %s。%.1f秒待機して再試行します (%s/%s)",
+                        e,
+                        wait_seconds,
+                        attempt,
+                        max_attempts,
+                    )
+                    time.sleep(wait_seconds)
+                    continue
+                logger.warning("OpenAI API呼び出しエラー: %s", e, exc_info=True)
+                raise
+
+        raise RuntimeError("OpenAI API呼び出しが失敗しました。")
 
 
 class OpenRouterCaller:
