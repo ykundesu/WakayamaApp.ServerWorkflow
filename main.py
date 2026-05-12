@@ -29,16 +29,19 @@ logger = logging.getLogger(__name__)
 from scraper.dormitory_scraper import scrape_dormitory_page
 from scraper.dormitory_calendar_scraper import scrape_dormitory_calendar_page
 from scraper.classes_scraper import scrape_classes_page
+from scraper.annual_events_scraper import scrape_annual_events_page
 from scraper.pdf_downloader import download_pdf, check_pdf_updated, get_file_hash
 from scraper.image_downloader import download_image, check_image_updated, get_file_hash as get_image_hash
 from processors.classes_processor import process_classes_pdf
 from processors.meals_processor import process_meals_pdf
 from processors.school_rules_processor import process_school_rules
 from processors.dormitory_events_processor import process_dormitory_events_image
+from processors.annual_events_processor import process_annual_events_pdf
 from server_updater.file_manager import (
     copy_final_files,
     copy_meals_files,
     copy_dormitory_events_files,
+    copy_annual_events_files,
     copy_school_rules_files,
     has_server_target_data,
     load_processed_hashes,
@@ -648,6 +651,110 @@ def process_dormitory_events(
         return False, processed_state, False
 
 
+def process_annual_events(
+    output_dir: Path,
+    api_key: str,
+    model: str = "gpt-5.5",
+    dpi: int = 220,
+    discord_webhook: Optional[str] = None,
+    processed_hashes: Optional[Set[str]] = None,
+    server_repo_path: Optional[Path] = None,
+    regenerate: bool = False,
+    reasoning_effort: str = "medium",
+) -> tuple[bool, Optional[str], bool]:
+    """年間行事PDFの処理。
+
+    Returns:
+        (エラーが無かったか, 処理済みPDFのハッシュ, 何かを処理したか)
+    """
+    logger.info("年間行事PDF処理を開始します")
+    processed_hashes = processed_hashes or set()
+    try:
+        pdf_info = scrape_annual_events_page()
+        if not pdf_info or not pdf_info.get("url"):
+            logger.warning("年間行事PDFリンクが見つかりませんでした。")
+            if discord_webhook:
+                notify_no_update(discord_webhook, "annual_events", "PDFリンクが見つかりませんでした。")
+            return True, None, False
+
+        pdf_url = str(pdf_info["url"])
+        page_url = str(pdf_info.get("page_url") or "")
+        academic_year = pdf_info.get("academic_year")
+        label = str(academic_year) if academic_year else "latest"
+        logger.info("年間行事PDF URL: %s", pdf_url)
+
+        pdf_path = output_dir / "pdfs" / f"annual_events_{label}.pdf"
+        pdf_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = pdf_path.with_suffix(".tmp")
+
+        logger.debug("年間行事PDFを一時ダウンロードしてハッシュを確認中...")
+        if not download_pdf(pdf_url, temp_path):
+            if regenerate and pdf_path.exists():
+                logger.warning("年間行事PDFの一時ダウンロードに失敗しました。既存PDFで再生成します。")
+                pdf_hash = get_file_hash(pdf_path)
+            else:
+                error_message = "年間行事PDFのダウンロードに失敗しました。"
+                logger.error(error_message)
+                if discord_webhook:
+                    notify_error(discord_webhook, "annual_events", error_message, {"PDF": pdf_url})
+                return False, None, False
+        else:
+            pdf_hash = get_file_hash(temp_path)
+            server_missing = bool(server_repo_path and not has_server_target_data(server_repo_path, "annual_events"))
+            if pdf_hash and pdf_hash in processed_hashes and not regenerate and not server_missing:
+                logger.info("年間行事PDFは既に処理済みです（ハッシュ: %s...）。スキップします。", pdf_hash[:16])
+                temp_path.unlink(missing_ok=True)
+                if discord_webhook:
+                    notify_no_update(discord_webhook, "annual_events", "PDFは既に処理済みです。")
+                return True, pdf_hash, False
+            if pdf_hash and pdf_hash in processed_hashes and server_missing:
+                logger.warning("年間行事PDFは既処理ハッシュですが、サーバー側データが見つからないため再生成します。")
+            temp_path.replace(pdf_path)
+
+        events_output_dir = output_dir / "annual_events_output"
+        if regenerate and events_output_dir.exists():
+            logger.info("年間行事の既存出力を削除してから再生成します: %s", events_output_dir)
+            shutil.rmtree(events_output_dir)
+
+        result = process_annual_events_pdf(
+            pdf_path=str(pdf_path),
+            out_dir=events_output_dir,
+            page_url=page_url,
+            pdf_url=pdf_url,
+            pdf_hash=pdf_hash,
+            academic_year_hint=academic_year if isinstance(academic_year, int) else None,
+            monthly_events_hint=pdf_info.get("monthly_events") if isinstance(pdf_info.get("monthly_events"), dict) else None,
+            model=model,
+            api_key=api_key,
+            dpi=dpi,
+            reasoning_effort=reasoning_effort,
+        )
+        if result is None:
+            error_message = "年間行事PDF処理に失敗しました。"
+            logger.error(error_message)
+            if discord_webhook:
+                notify_error(discord_webhook, "annual_events", error_message, {"PDF": pdf_url})
+            return False, pdf_hash, False
+
+        result_year = next(iter(result.values())).get("academicYear") if result else academic_year
+        if discord_webhook:
+            notify_success(
+                discord_webhook,
+                "annual_events",
+                {
+                    "PDF": pdf_url,
+                    "年度": result_year,
+                    "出力": str(events_output_dir / "annual-events"),
+                },
+            )
+        return True, pdf_hash, True
+    except Exception as e:
+        logger.exception("年間行事処理エラー: %s", e)
+        if discord_webhook:
+            notify_error(discord_webhook, "annual_events", str(e))
+        return False, None, False
+
+
 def update_server(
     output_dir: Path,
     server_repo_path: Path,
@@ -670,12 +777,14 @@ def update_server(
         classes_output_dir = output_dir / "classes_output"
         meals_output_dir = output_dir / "meals_output"
         dormitory_events_output_dir = output_dir / "dormitory_events_output"
+        annual_events_output_dir = output_dir / "annual_events_output"
         rules_output_dir = output_dir / "rules_output"
         
         copied_files = []
         classes_copied_counter = 0
         meals_copied_counter = 0
         dormitory_events_copied_counter = 0
+        annual_events_copied_counter = 0
         rules_copied_counter = 0
         rules_removed_counter = 0
         rules_figures_copied_counter = 0
@@ -709,6 +818,16 @@ def update_server(
             logger.info(f"寮行事データ: {len(copied)}ファイルをコピーしました。")
         else:
             logger.debug("寮行事データディレクトリが存在しません")
+
+        if annual_events_output_dir.exists():
+            logger.info("年間行事データファイルをコピー中...")
+            annual_events_target = server_repo_path / "v1" / "annual-events"
+            copied = copy_annual_events_files(annual_events_output_dir, annual_events_target)
+            copied_files.extend(copied)
+            annual_events_copied_counter = len(copied)
+            logger.info(f"年間行事データ: {len(copied)}ファイルをコピーしました。")
+        else:
+            logger.debug("年間行事データディレクトリが存在しません")
 
         if rules_output_dir.exists():
             rules_manifest_path = rules_output_dir / "manifest.json"
@@ -748,6 +867,7 @@ def update_server(
         meals_hash_file = output_dir / "meals_hashes.json"
         classes_hash_file = output_dir / "classes_hashes.json"
         dormitory_state_file = output_dir / "dormitory_events_state.json"
+        annual_events_hash_file = output_dir / "annual_events_hashes.json"
         rules_hash_file = output_dir / "school_rules_hashes.json"
         
         if meals_hash_file.exists():
@@ -771,6 +891,13 @@ def update_server(
                 hash_files_updated += 1
                 logger.info(f"規則の処理済みハッシュを更新しました: {updated_file}")
 
+        if annual_events_hash_file.exists():
+            logger.info("年間行事の処理済みハッシュをマージ中...")
+            updated_file = merge_and_write_processed_hashes(annual_events_hash_file, server_repo_path, "annual_events")
+            if updated_file:
+                hash_files_updated += 1
+                logger.info(f"年間行事の処理済みハッシュを更新しました: {updated_file}")
+
         if dormitory_state_file.exists():
             logger.info("寮行事の状態ファイルをマージ中...")
             updated_file = merge_and_write_dormitory_events_state(dormitory_state_file, server_repo_path)
@@ -792,6 +919,8 @@ def update_server(
             data_updates.append(f"{meals_copied_counter}の寮食ファイル")
         if dormitory_events_copied_counter:
             data_updates.append(f"{dormitory_events_copied_counter}の寮行事ファイル")
+        if annual_events_copied_counter:
+            data_updates.append(f"{annual_events_copied_counter}の年間行事ファイル")
         if rules_copied_counter or rules_removed_counter:
             if rules_removed_counter:
                 data_updates.append(f"{rules_copied_counter}の規則ファイル/{rules_removed_counter}件削除")
@@ -841,6 +970,13 @@ REGENERATE_TARGET_ALIASES = {
     "dormitory_event": "dormitory_events",
     "dormitory_events": "dormitory_events",
     "calendar": "dormitory_events",
+    "annual": "annual_events",
+    "annual-event": "annual_events",
+    "annual-events": "annual_events",
+    "annual_event": "annual_events",
+    "annual_events": "annual_events",
+    "school-calendar": "annual_events",
+    "school_calendar": "annual_events",
 }
 
 REGENERATE_SELECTOR_ALIASES = {
@@ -863,7 +999,7 @@ def normalize_regenerate_target(raw_target: str) -> str:
     normalized = raw_target.strip().lower().replace(" ", "-")
     target = REGENERATE_TARGET_ALIASES.get(normalized)
     if not target:
-        valid = "meals, classes, dormitory_events"
+        valid = "meals, classes, dormitory_events, annual_events"
         raise ValueError(f"再生成対象が不正です: {raw_target}（指定可能: {valid}）")
     return target
 
@@ -953,18 +1089,25 @@ def main():
     logger.info("=" * 60)
     
     parser = argparse.ArgumentParser(description="ServerProcesser自動化ワークフロー")
-    parser.add_argument("--process", choices=["meals", "classes", "dormitory_events", "rules", "all"], default="all", help="処理タイプ")
+    parser.add_argument("--process", choices=["meals", "classes", "dormitory_events", "annual_events", "rules", "all"], default="all", help="処理タイプ")
     parser.add_argument(
         "--regenerate",
         type=str,
         action="append",
         default=None,
-        help="特定データを強制再生成（例: meals:latest, meals:current, meals:next, classes, dormitory_events。カンマ区切り/複数回指定可）",
+        help="特定データを強制再生成（例: meals:latest, meals:current, meals:next, classes, dormitory_events, annual_events。カンマ区切り/複数回指定可）",
     )
     parser.add_argument("--output-dir", type=Path, default=Path("output"), help="出力ディレクトリ")
     parser.add_argument("--api-key", type=str, default=None, help="APIキー（未指定なら環境変数 GOOGLE_API_KEY を使用）")
     parser.add_argument("--model", type=str, default="gemini-2.5-pro", help="使用するモデル")
     parser.add_argument("--fallback-model", type=str, default=None, help="通常処理用フォールバックモデル")
+    parser.add_argument("--annual-events-model", type=str, default="gpt-5.5", help="年間行事処理用OpenAI公式APIモデル")
+    parser.add_argument(
+        "--annual-events-reasoning-effort",
+        choices=["medium", "high"],
+        default="medium",
+        help="年間行事処理のOpenAI reasoning effort",
+    )
     parser.add_argument(
         "--rules-model",
         type=str,
@@ -1018,6 +1161,7 @@ def main():
     logger.info(f"使用モデル: {args.model}")
     if args.fallback_model:
         logger.info(f"通常処理フォールバックモデル: {args.fallback_model}")
+    logger.info(f"年間行事モデル: {args.annual_events_model} (reasoning_effort={args.annual_events_reasoning_effort})")
     logger.info(f"規則モデル: {', '.join(rules_models)}")
     logger.info(f"規則プロバイダ: {args.rules_provider}")
     logger.info(f"DPI: {args.dpi}")
@@ -1049,6 +1193,7 @@ def main():
     if args.fallback_model:
         normal_models.append(args.fallback_model)
     uses_normal_models = args.process in ["meals", "classes", "dormitory_events", "all"]
+    uses_annual_events = args.process in ["annual_events", "all"]
     needs_gemini_key = uses_normal_models and any(
         not model_uses_openrouter(model) and not model_uses_openai(model)
         for model in normal_models
@@ -1060,7 +1205,14 @@ def main():
     if args.process in ["rules", "all"] and args.rules_provider == "openrouter":
         needs_openrouter_key = True
 
-    needs_openai_key = uses_normal_models and any(model_uses_openai(model) for model in normal_models)
+    needs_openai_key = (
+        (uses_normal_models and any(model_uses_openai(model) for model in normal_models))
+        or uses_annual_events
+    )
+
+    if uses_annual_events and not model_uses_openai(args.annual_events_model):
+        logger.error("年間行事処理にはOpenAI公式APIモデルを指定してください。")
+        sys.exit(1)
 
     if needs_gemini_key and not api_key:
         logger.error("Google APIキーが設定されていません。")
@@ -1101,9 +1253,10 @@ def main():
     meals_processed_hashes: Set[str] = set()
     classes_processed_hashes: Set[str] = set()
     rules_processed_hashes: Set[str] = set()
+    annual_events_processed_hashes: Set[str] = set()
     dormitory_events_state: Dict[str, Optional[str]] = {}
     
-    if args.update_server and (args.process in ["meals", "classes", "dormitory_events", "rules", "all"]):
+    if args.update_server and (args.process in ["meals", "classes", "dormitory_events", "annual_events", "rules", "all"]):
         if github_token and args.server_repo_url:
             logger.info("処理前に既処理ハッシュを読み込み中...")
             if init_git_repo(server_repo_path, github_token, args.server_repo_url, args.branch):
@@ -1116,6 +1269,9 @@ def main():
                 if args.process in ["rules", "all"]:
                     rules_processed_hashes = load_processed_hashes(server_repo_path, "school_rules")
                     logger.info(f"規則の既処理ハッシュ: {len(rules_processed_hashes)}件")
+                if args.process in ["annual_events", "all"]:
+                    annual_events_processed_hashes = load_processed_hashes(server_repo_path, "annual_events")
+                    logger.info(f"年間行事の既処理ハッシュ: {len(annual_events_processed_hashes)}件")
                 if args.process in ["dormitory_events", "all"]:
                     dormitory_events_state = load_dormitory_events_state(server_repo_path)
                     logger.info("寮行事の既状態を読み込みました")
@@ -1129,6 +1285,7 @@ def main():
     meals_collected_hashes: List[str] = []
     classes_collected_hash: Optional[str] = None
     rules_collected_hashes: List[str] = []
+    annual_events_collected_hash: Optional[str] = None
     
     # 処理実行
     if args.process in ["meals", "all"]:
@@ -1173,6 +1330,23 @@ def main():
         had_any_error |= (not events_ok)
         dormitory_events_state = events_state
         logger.info("--- 寮行事処理を完了 ---")
+
+    if args.process in ["annual_events", "all"]:
+        logger.info("--- 年間行事処理を開始 ---")
+        annual_events_ok, collected_hash, annual_events_did_process = process_annual_events(
+            output_dir=output_dir,
+            api_key=openai_api_key or "",
+            model=args.annual_events_model,
+            dpi=args.dpi,
+            discord_webhook=discord_webhook,
+            processed_hashes=annual_events_processed_hashes,
+            server_repo_path=server_repo_path if args.update_server else None,
+            regenerate=bool(regenerate_specs.get("annual_events")),
+            reasoning_effort=args.annual_events_reasoning_effort,
+        )
+        had_any_error |= (not annual_events_ok)
+        annual_events_collected_hash = collected_hash
+        logger.info("--- 年間行事処理を完了 ---")
 
     if args.process in ["classes", "all"]:
         logger.info("--- 授業処理を開始 ---")
@@ -1252,6 +1426,15 @@ def main():
             logger.info(f"授業の処理済みハッシュを保存しました: {classes_hash_file}")
         except Exception as e:
             logger.warning(f"授業の処理済みハッシュの保存に失敗しました: {e}")
+
+    if annual_events_collected_hash:
+        annual_events_hash_file = output_dir / "annual_events_hashes.json"
+        try:
+            with open(annual_events_hash_file, "w", encoding="utf-8") as f:
+                json.dump({"processed": [annual_events_collected_hash]}, f, ensure_ascii=False, indent=2)
+            logger.info(f"年間行事の処理済みハッシュを保存しました: {annual_events_hash_file}")
+        except Exception as e:
+            logger.warning(f"年間行事の処理済みハッシュの保存に失敗しました: {e}")
 
     if rules_collected_hashes:
         rules_hash_file = output_dir / "school_rules_hashes.json"

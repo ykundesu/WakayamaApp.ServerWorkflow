@@ -17,6 +17,7 @@ on:
           - meals
           - classes
           - dormitory_events
+          - annual_events
           - rules
       regenerate:
         description: '強制再生成する対象'
@@ -31,6 +32,7 @@ on:
           - meals:all
           - classes
           - dormitory_events
+          - annual_events
 
 jobs:
   process:
@@ -99,6 +101,8 @@ jobs:
             --output-dir ./output \
             --model gpt-5.5 \
             --fallback-model moonshotai/kimi-k2.6 \
+            --annual-events-model gpt-5.5 \
+            --annual-events-reasoning-effort medium \
             --rules-provider openrouter \
             --rules-model openai/gpt-oss-120b:free,openai/gpt-oss-120b \
             --update-server \

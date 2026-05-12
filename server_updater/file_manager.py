@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def has_server_target_data(
     server_repo_path: Path,
-    target_name: Literal["meals", "classes", "dormitory_events", "school_rules"],
+    target_name: Literal["meals", "classes", "dormitory_events", "school_rules", "annual_events"],
 ) -> bool:
     """サーバーリポジトリ側に対象データが存在するか確認する。"""
     if target_name == "meals":
@@ -30,6 +30,17 @@ def has_server_target_data(
     if target_name == "dormitory_events":
         target_dir = server_repo_path / "v1" / "dormitory" / "events"
         return target_dir.exists() and any(target_dir.glob("*.json"))
+
+    if target_name == "annual_events":
+        target_dir = server_repo_path / "v1" / "annual-events"
+        regular_dir = target_dir / "regular"
+        advanced_dir = target_dir / "advanced"
+        return (
+            regular_dir.exists()
+            and advanced_dir.exists()
+            and any(regular_dir.glob("*.json"))
+            and any(advanced_dir.glob("*.json"))
+        )
 
     target_dir = server_repo_path / "v1" / "school-rules"
     rules_dir = target_dir / "rules"
@@ -150,7 +161,34 @@ def copy_dormitory_events_files(source_dir: Path, target_dir: Path) -> List[Tupl
     return copied_files
 
 
-def load_processed_hashes(server_repo_path: Path, target_name: Literal["meals", "classes", "school_rules"]) -> Set[str]:
+def copy_annual_events_files(source_dir: Path, target_dir: Path) -> List[Tuple[Path, Path]]:
+    """Copy annual events files into WakayamaServer/v1/annual-events."""
+    logger.info(f"年間行事データファイルをコピー中: {source_dir} -> {target_dir}")
+    copied_files = []
+    events_dir = source_dir / "annual-events"
+
+    if not events_dir.exists():
+        logger.warning(f"annual-events/ディレクトリが存在しません: {events_dir}")
+        return copied_files
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for course in ("regular", "advanced"):
+        source_course_dir = events_dir / course
+        if not source_course_dir.exists():
+            logger.warning(f"年間行事の{course}ディレクトリが存在しません: {source_course_dir}")
+            continue
+        target_course_dir = target_dir / course
+        target_course_dir.mkdir(parents=True, exist_ok=True)
+        for json_file in source_course_dir.glob("*.json"):
+            target_file = target_course_dir / json_file.name
+            shutil.copy2(json_file, target_file)
+            copied_files.append((json_file, target_file))
+
+    logger.info(f"年間行事データファイルコピー完了: {len(copied_files)}ファイル")
+    return copied_files
+
+
+def load_processed_hashes(server_repo_path: Path, target_name: Literal["meals", "classes", "school_rules", "annual_events"]) -> Set[str]:
     """
     サーバーリポジトリから処理済みハッシュを読み込む
     
@@ -209,7 +247,7 @@ def load_dormitory_events_state(server_repo_path: Path) -> Dict[str, Optional[st
 def merge_and_write_processed_hashes(
     source_hash_file: Path,
     server_repo_path: Path,
-    target_name: Literal["meals", "classes", "school_rules"],
+    target_name: Literal["meals", "classes", "school_rules", "annual_events"],
 ) -> Optional[Path]:
     """
     処理済みハッシュをマージしてサーバーリポジトリに書き込む

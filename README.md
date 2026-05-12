@@ -5,6 +5,7 @@
 ## 概要
 
 - 寮食ページ・授業ページ・学校規則ページから最新のPDFをスクレイピング
+- 年間行事ページから最新の行事計画PDFをスクレイピング
 - PDFや規則文書を処理してJSONデータを生成
 - WakayamaServerリポジトリを更新
 - Discord Webhookで処理結果を通知
@@ -32,6 +33,7 @@ pip install -r requirements.txt
 
 2. 環境変数を設定:
 - `GOOGLE_API_KEY`: Google Gemini APIキー
+- `OPENAI_API_KEY`: OpenAI APIキー（年間行事の抽出、OpenAIモデル利用時に使用）
 - `OPENROUTER_API_KEY`: OpenRouter APIキー（学校規則の抽出でOpenRouterを使う場合）
 - `OPENROUTER_PROVIDER`: OpenRouter providerフィルタ（JSON文字列。例: {"order":["anthropic","amazon-bedrock","google-vertex"],"allow_fallbacks":true}）
 - `DISCORD_WEBHOOK_URL`: Discord Webhook URL（オプション）
@@ -50,6 +52,9 @@ python main.py --process meals
 
 # 授業のみ処理
 python main.py --process classes
+
+# 年間行事のみ処理（OpenAI Structured Outputsを使用）
+python main.py --process annual_events --annual-events-model gpt-5.5 --annual-events-reasoning-effort medium
 
 # 学校規則のみ処理
 python main.py --process rules --rules-provider gemini --rules-model gemini-2.5-pro
@@ -73,6 +78,7 @@ python main.py --process all --update-server --server-repo-url https://github.co
 GitHub Secretsに以下を設定してください:
 
 - `GOOGLE_API_KEY`: Google Gemini APIキー
+- `OPENAI_API_KEY`: OpenAI APIキー（年間行事の抽出、OpenAIモデル利用時に使用）
 - `OPENROUTER_API_KEY`: OpenRouter APIキー（学校規則の抽出でOpenRouterを使う場合）
 - `OPENROUTER_PROVIDER`: OpenRouter providerフィルタ（JSON文字列）
 - `DISCORD_WEBHOOK_URL`: Discord Webhook URL
