@@ -477,7 +477,7 @@ class OpenAICaller:
                     self.OPENAI_API_URL,
                     headers=headers,
                     data=json.dumps(body),
-                    timeout=120,
+                    timeout=600,
                 )
                 text_format_type = (
                     body.get("text", {})

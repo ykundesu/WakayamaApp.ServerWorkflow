@@ -11,8 +11,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import fitz
-
 from common.api_client import OpenAICaller, model_uses_openai
 from common.image_utils import render_pdf_pages, save_image
 from common.json_extractor import extract_json_from_text
@@ -177,14 +175,13 @@ ANNUAL_EVENTS_SCHEMA = {
 ANNUAL_EVENTS_PROMPT = """和歌山高専の本科生および専攻科生の年間行事計画表を抽出してください。
 
 入力:
-- PDFをページ画像として添付します。画像が主情報です。
-- 参考として、PDFから機械抽出したテキストと、公式ページの月別行事リストを渡します。
+- PDFをページ画像として添付します。抽出は添付画像の内容のみを根拠にしてください。
 
 抽出ルール:
 - academicYear は対象年度の西暦です。
 - regular は本科、advanced は専攻科です。1回の応答で両方を必ず出してください。
 - monthlyEvents は月ごとに、その月に存在する行事をカテゴリ付きで出してください。
-- 公式ページの月別行事リストまたはPDF下部の月別メモ由来は sourceTypes に monthly_note を入れてください。
+- PDF下部の月別メモ由来は sourceTypes に monthly_note を入れてください。
 - 日付セルやカレンダー本体由来は sourceTypes に day_cell を入れてください。
 - 同じ行事が月別メモと日付セルの両方にある場合は1件にまとめ、sourceTypes は両方を入れてください。
 - 日付が読める行事は dates に YYYY-MM-DD 形式で入れてください。範囲の場合は date と endDate を使ってください。
@@ -198,35 +195,9 @@ ANNUAL_EVENTS_PROMPT = """和歌山高専の本科生および専攻科生の年
 """
 
 
-def _read_pdf_text(pdf_path: Path) -> str:
-    chunks: List[str] = []
-    with fitz.open(pdf_path) as doc:
-        for index, page in enumerate(doc, start=1):
-            text = page.get_text("text")
-            chunks.append(f"[page {index}]\n{text.strip()}")
-    return "\n\n".join(chunks).strip()
-
-
-def _build_prompt(
-    *,
-    academic_year_hint: Optional[int],
-    page_url: str,
-    pdf_url: str,
-    pdf_text: str,
-    monthly_events_hint: Optional[Dict[int, List[str]]],
-) -> str:
-    hint_payload = {
-        "academicYearHint": academic_year_hint,
-        "pageUrl": page_url,
-        "pdfUrl": pdf_url,
-        "monthlyEventsFromPage": monthly_events_hint or {},
-    }
+def _build_prompt() -> str:
     return (
         ANNUAL_EVENTS_PROMPT
-        + "\n\n[抽出ヒント]\n"
-        + json.dumps(hint_payload, ensure_ascii=False, indent=2)
-        + "\n\n[PDFテキスト抽出結果]\n"
-        + (pdf_text or "(テキスト抽出なし)")
         + "\n\n[JSON Schema]\n"
         + json.dumps(ANNUAL_EVENTS_SCHEMA, ensure_ascii=False, indent=2)
     )
@@ -545,7 +516,6 @@ def process_annual_events_pdf(
     pdf_url: str,
     pdf_hash: Optional[str] = None,
     academic_year_hint: Optional[int] = None,
-    monthly_events_hint: Optional[Dict[int, List[str]]] = None,
     model: str = "gpt-5.5",
     api_key: Optional[str] = None,
     dpi: int = 220,
@@ -562,14 +532,10 @@ def process_annual_events_pdf(
         pdf_file = Path(pdf_path)
         out_dir.mkdir(parents=True, exist_ok=True)
         images_dir = out_dir / "images"
-        raw_dir = out_dir / "raw"
         json_dir = out_dir / "json"
         final_dir = out_dir / "annual-events"
-        for directory in (images_dir, raw_dir, json_dir, final_dir):
+        for directory in (images_dir, json_dir, final_dir):
             directory.mkdir(parents=True, exist_ok=True)
-
-        pdf_text = _read_pdf_text(pdf_file)
-        (raw_dir / "pdf_text.txt").write_text(pdf_text, encoding="utf-8")
 
         logger.info("年間行事PDFを画像化中...")
         pages = render_pdf_pages(str(pdf_file), dpi=dpi)
@@ -579,13 +545,7 @@ def process_annual_events_pdf(
             images[key] = image
             save_image(image, images_dir / f"{key}.png")
 
-        prompt = _build_prompt(
-            academic_year_hint=academic_year_hint,
-            page_url=page_url,
-            pdf_url=pdf_url,
-            pdf_text=pdf_text,
-            monthly_events_hint=monthly_events_hint,
-        )
+        prompt = _build_prompt()
         caller = OpenAICaller(
             model=model,
             api_key=api_key,

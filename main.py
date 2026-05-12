@@ -723,7 +723,6 @@ def process_annual_events(
             pdf_url=pdf_url,
             pdf_hash=pdf_hash,
             academic_year_hint=academic_year if isinstance(academic_year, int) else None,
-            monthly_events_hint=pdf_info.get("monthly_events") if isinstance(pdf_info.get("monthly_events"), dict) else None,
             model=model,
             api_key=api_key,
             dpi=dpi,
@@ -734,7 +733,7 @@ def process_annual_events(
             logger.error(error_message)
             if discord_webhook:
                 notify_error(discord_webhook, "annual_events", error_message, {"PDF": pdf_url})
-            return False, pdf_hash, False
+            return False, None, False
 
         result_year = next(iter(result.values())).get("academicYear") if result else academic_year
         if discord_webhook:
@@ -1345,7 +1344,7 @@ def main():
             reasoning_effort=args.annual_events_reasoning_effort,
         )
         had_any_error |= (not annual_events_ok)
-        annual_events_collected_hash = collected_hash
+        annual_events_collected_hash = collected_hash if annual_events_ok and annual_events_did_process else None
         logger.info("--- 年間行事処理を完了 ---")
 
     if args.process in ["classes", "all"]:
